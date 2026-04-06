@@ -1,0 +1,267 @@
+export type CaseStage = 'New' | 'Under Review' | 'Agent Assignment' | 'Ready For Legal' | 'Recovery In Progress' | 'Closed';
+
+export interface ChainOfCustodyEntry {
+  timestamp: string;
+  event: string;
+  actor: string;
+  hash: string;
+  deviceId: string;
+  status: 'Verified' | 'Pending' | 'Failed';
+}
+
+export interface Case {
+  id: string;
+  isNew: boolean;
+  timestamp: Date;
+  location: {
+    name: string;
+    lat: number;
+    lng: number;
+    city: string;
+    address: string;
+    phone: string;
+    email: string;
+  };
+  pastOffences: number;
+  expectedFine: number;
+  musicLabel: string;
+  
+  // Detail Page Data
+  videoProofUrl: string;
+  aiExplanation: string;
+  
+  trustGates: {
+    mediaHashKey: boolean;
+    payloadSignature: boolean;
+    clockSkewDetection: boolean;
+    geofencingContinuity: boolean;
+    deviceTrustBand: boolean;
+  };
+  
+  songAssessment: {
+    title: string;
+    artists: string[];
+    labelOwner: string;
+    isrc: string;
+    upc: string;
+    rightsAssociation: string;
+  };
+  
+  absoluteProof: {
+    smallVideoUrl: string;
+    venueImages: string[];
+    obstructionFlags: string;
+    performanceContext: string;
+  };
+  
+  chainOfCustody: ChainOfCustodyEntry[];
+  
+  stage: CaseStage;
+  qualityScore: number;
+  recoverableValue: number;
+  
+  // Assignment Data
+  assignedTo?: string;
+  notes?: string;
+  assignmentType?: 'Agent' | 'Lawyer';
+  agentResolutionNote?: string;
+  resolvedByAgentName?: string;
+}
+
+export const MOCK_CASES: Case[] = [
+  {
+    id: "CASE-8821",
+    isNew: true,
+    timestamp: new Date(2024, 3, 5, 10, 30),
+    location: { 
+      name: "Blue Lagoon Restobar", 
+      lat: 19.0760, 
+      lng: 72.8777, 
+      city: "Mumbai",
+      address: "Plot No. 12, Juhu Tara Rd, Mumbai, Maharashtra 400049",
+      phone: "+91 22 2611 1234",
+      email: "contact@bluelagoon.in"
+    },
+    pastOffences: 3,
+    expectedFine: 45000,
+    musicLabel: "T-Series",
+    videoProofUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-in-a-nightclub-4351-large.mp4",
+    aiExplanation: "The video captures a high-decibel public performance of copyrighted material. Multiple speakers are visible, and the audio fingerprint matches 'Tum Hi Ho' with 98% confidence. No licensing certificate is displayed at the entrance or DJ booth.",
+    trustGates: {
+      mediaHashKey: true,
+      payloadSignature: true,
+      clockSkewDetection: true,
+      geofencingContinuity: true,
+      deviceTrustBand: true
+    },
+    songAssessment: {
+      title: "Tum Hi Ho",
+      artists: ["Arijit Singh"],
+      labelOwner: "T-Series",
+      isrc: "IN-T12-13-00001",
+      upc: "8901234567890",
+      rightsAssociation: "IPRS / PPL"
+    },
+    absoluteProof: {
+      smallVideoUrl: "https://assets.mixkit.co/videos/preview/mixkit-dj-playing-music-at-a-club-4354-large.mp4",
+      venueImages: [
+        "https://images.unsplash.com/photo-1514525253361-bee8718a74a2?w=400&h=300&fit=crop",
+        "https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=400&h=300&fit=crop"
+      ],
+      obstructionFlags: "Clear line of sight to the source. No significant visual noise detected.",
+      performanceContext: "Peak hour Friday night, estimated attendance 250+."
+    },
+    chainOfCustody: [
+      { timestamp: "2024-04-05T10:30:12Z", event: "Initial Capture", actor: "Field Device #442", hash: "sha256:e3b0c442...", deviceId: "DEV-X99-01", status: "Verified" },
+      { timestamp: "2024-04-05T10:31:45Z", event: "Server Ingestion", actor: "Ingest-Node-04", hash: "sha256:e3b0c442...", deviceId: "SRV-IN-04", status: "Verified" },
+      { timestamp: "2024-04-05T10:32:10Z", event: "AI Fingerprint Match", actor: "GenAI-Engine-V3", hash: "match_conf:0.982", deviceId: "AI-PROC-01", status: "Verified" }
+    ],
+    stage: "New",
+    qualityScore: 94,
+    recoverableValue: 125000
+  },
+  {
+    id: "CASE-8822",
+    isNew: false,
+    timestamp: new Date(2024, 3, 5, 0, 15),
+    location: { 
+      name: "Skyline Rooftop", 
+      lat: 12.9716, 
+      lng: 77.5946, 
+      city: "Bangalore",
+      address: "24th Floor, UB City, Vittal Mallya Rd, Bengaluru, Karnataka 560001",
+      phone: "+91 80 4112 5678",
+      email: "info@skylinerooftop.com"
+    },
+    pastOffences: 0,
+    expectedFine: 15000,
+    musicLabel: "Zee Music Co.",
+    videoProofUrl: "https://assets.mixkit.co/videos/preview/mixkit-crowd-at-a-concert-with-lights-4353-large.mp4",
+    aiExplanation: "Audio detection indicates 'Zingaat' playing during a private corporate event. However, the venue claims a one-time event license which is currently being verified against the database.",
+    trustGates: {
+      mediaHashKey: true,
+      payloadSignature: true,
+      clockSkewDetection: false,
+      geofencingContinuity: true,
+      deviceTrustBand: true
+    },
+    songAssessment: {
+      title: "Zingaat",
+      artists: ["Ajay-Atul"],
+      labelOwner: "Zee Music Co.",
+      isrc: "IN-Z13-16-00452",
+      upc: "8909876543210",
+      rightsAssociation: "IPRS"
+    },
+    absoluteProof: {
+      smallVideoUrl: "https://assets.mixkit.co/videos/preview/mixkit-concert-crowd-with-raised-hands-4355-large.mp4",
+      venueImages: [
+        "https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=400&h=300&fit=crop"
+      ],
+      obstructionFlags: "Partial obstruction by stage lighting. Audio remains clear.",
+      performanceContext: "Corporate mixer, semi-private setting."
+    },
+    chainOfCustody: [
+      { timestamp: "2024-04-05T00:15:05Z", event: "Initial Capture", actor: "Field Device #112", hash: "sha256:f4a1d223...", deviceId: "DEV-X11-02", status: "Verified" },
+      { timestamp: "2024-04-05T00:16:30Z", event: "Clock Skew Check", actor: "Trust-Gate-B", hash: "skew_detected:1.2s", deviceId: "SRV-TR-02", status: "Pending" }
+    ],
+    stage: "New",
+    qualityScore: 72,
+    recoverableValue: 45000
+  },
+  {
+    id: "CASE-8823",
+    isNew: false,
+    timestamp: new Date(2024, 3, 4, 22, 0),
+    location: { 
+      name: "The Local Pub", 
+      lat: 28.6139, 
+      lng: 77.2090, 
+      city: "Delhi",
+      address: "H-Block, Connaught Place, New Delhi, Delhi 110001",
+      phone: "+91 11 2341 9876",
+      email: "manager@thelocalpub.co.in"
+    },
+    pastOffences: 5,
+    expectedFine: 85000,
+    musicLabel: "Sony Music India",
+    videoProofUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-at-a-party-4352-large.mp4",
+    aiExplanation: "Repeat offender. Video shows continuous playback of Sony Music catalog. GPS coordinates match the venue exactly. High confidence in infringement.",
+    trustGates: {
+      mediaHashKey: true,
+      payloadSignature: true,
+      clockSkewDetection: true,
+      geofencingContinuity: true,
+      deviceTrustBand: true
+    },
+    songAssessment: {
+      title: "Kesariya",
+      artists: ["Arijit Singh"],
+      labelOwner: "Sony Music India",
+      isrc: "IN-S11-22-00991",
+      upc: "8904561237890",
+      rightsAssociation: "IPRS / PPL"
+    },
+    absoluteProof: {
+      smallVideoUrl: "https://assets.mixkit.co/videos/preview/mixkit-party-crowd-dancing-with-confetti-4356-large.mp4",
+      venueImages: [
+        "https://images.unsplash.com/photo-1524368535928-5b5e00ddc76b?w=400&h=300&fit=crop"
+      ],
+      obstructionFlags: "No obstructions. Clear view of the dance floor and DJ setup.",
+      performanceContext: "Saturday night, full capacity."
+    },
+    chainOfCustody: [
+      { timestamp: "2024-04-04T22:00:01Z", event: "Initial Capture", actor: "Field Device #881", hash: "sha256:b2c1a334...", deviceId: "DEV-X88-05", status: "Verified" },
+      { timestamp: "2024-04-04T22:01:20Z", event: "Server Ingestion", actor: "Ingest-Node-01", hash: "sha256:b2c1a334...", deviceId: "SRV-IN-01", status: "Verified" }
+    ],
+    stage: "New",
+    qualityScore: 98,
+    recoverableValue: 210000
+  },
+  {
+    id: "CASE-8824",
+    isNew: false,
+    timestamp: new Date(),
+    location: { 
+      name: "Club Nirvana", 
+      lat: 18.5204, 
+      lng: 73.8567, 
+      city: "Pune",
+      address: "Main Rd, Koregaon Park, Pune, Maharashtra 411001",
+      phone: "+91 20 2615 4321",
+      email: "events@clubnirvana.com"
+    },
+    pastOffences: 1,
+    expectedFine: 30000,
+    musicLabel: "Sony Music India",
+    videoProofUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-in-a-nightclub-4351-large.mp4",
+    aiExplanation: "Real-time detection of Sony Music catalog. High volume playback confirmed.",
+    trustGates: {
+      mediaHashKey: true,
+      payloadSignature: true,
+      clockSkewDetection: true,
+      geofencingContinuity: true,
+      deviceTrustBand: true
+    },
+    songAssessment: {
+      title: "Malhari",
+      artists: ["Vishal Dadlani"],
+      labelOwner: "Sony Music India",
+      isrc: "IN-S11-15-00123",
+      upc: "8904561230001",
+      rightsAssociation: "IPRS"
+    },
+    absoluteProof: {
+      smallVideoUrl: "https://assets.mixkit.co/videos/preview/mixkit-dj-playing-music-at-a-club-4354-large.mp4",
+      venueImages: [],
+      obstructionFlags: "None",
+      performanceContext: "Live detection"
+    },
+    chainOfCustody: [
+      { timestamp: new Date().toISOString(), event: "Live Capture", actor: "Field Device #990", hash: "sha256:live_hash...", deviceId: "DEV-LIVE-01", status: "Verified" }
+    ],
+    stage: "New",
+    qualityScore: 88,
+    recoverableValue: 95000
+  }
+];

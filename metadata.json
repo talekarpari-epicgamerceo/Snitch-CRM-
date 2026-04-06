@@ -1,0 +1,5 @@
+{
+  "name": "SonicGuard CRM",
+  "description": "Advanced Music Rights Enforcement & Case Management System",
+  "requestFramePermissions": ["geolocation"]
+}
