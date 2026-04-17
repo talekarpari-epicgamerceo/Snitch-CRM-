@@ -1,5 +1,25 @@
 export type CaseStage = 'New' | 'Under Review' | 'Agent Assignment' | 'Ready For Legal' | 'Recovery In Progress' | 'Closed';
 
+export type UserRole = 'Admin' | 'Lawyer' | 'Agent';
+
+export interface AuditEntry {
+  id: string;
+  timestamp: Date;
+  action: string;
+  actor: string;
+  previousStage?: CaseStage;
+  newStage?: CaseStage;
+  details?: string;
+}
+
+export interface Comment {
+  id: string;
+  timestamp: Date;
+  author: string;
+  text: string;
+  role: UserRole;
+}
+
 export interface ChainOfCustodyEntry {
   timestamp: string;
   event: string;
@@ -7,6 +27,15 @@ export interface ChainOfCustodyEntry {
   hash: string;
   deviceId: string;
   status: 'Verified' | 'Pending' | 'Failed';
+}
+
+export interface EvidenceVault {
+  id: string;
+  name: string;
+  timestamp: Date;
+  videoUrl?: string;
+  images: string[];
+  notes?: string;
 }
 
 export interface Case {
@@ -54,6 +83,9 @@ export interface Case {
     performanceContext: string;
   };
   
+  evidenceVaults: EvidenceVault[];
+  selectedVaultIds?: string[];
+  
   chainOfCustody: ChainOfCustodyEntry[];
   
   stage: CaseStage;
@@ -66,6 +98,12 @@ export interface Case {
   assignmentType?: 'Agent' | 'Lawyer';
   agentResolutionNote?: string;
   resolvedByAgentName?: string;
+  
+  // Audit & Communication
+  auditTrail: AuditEntry[];
+  comments: Comment[];
+  unreadComments?: boolean;
+  unreadMajorChanges?: boolean;
 }
 
 export const MOCK_CASES: Case[] = [
@@ -111,6 +149,19 @@ export const MOCK_CASES: Case[] = [
       obstructionFlags: "Clear line of sight to the source. No significant visual noise detected.",
       performanceContext: "Peak hour Friday night, estimated attendance 250+."
     },
+    evidenceVaults: [
+      {
+        id: "VAULT-1",
+        name: "Evidence Vault 1",
+        timestamp: new Date(2024, 3, 5, 10, 30),
+        videoUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-in-a-nightclub-4351-large.mp4",
+        images: [
+          "https://images.unsplash.com/photo-1514525253361-bee8718a74a2?w=400&h=300&fit=crop",
+          "https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=400&h=300&fit=crop"
+        ],
+        notes: "Initial forensic capture at venue."
+      }
+    ],
     chainOfCustody: [
       { timestamp: "2024-04-05T10:30:12Z", event: "Initial Capture", actor: "Field Device #442", hash: "sha256:e3b0c442...", deviceId: "DEV-X99-01", status: "Verified" },
       { timestamp: "2024-04-05T10:31:45Z", event: "Server Ingestion", actor: "Ingest-Node-04", hash: "sha256:e3b0c442...", deviceId: "SRV-IN-04", status: "Verified" },
@@ -118,7 +169,12 @@ export const MOCK_CASES: Case[] = [
     ],
     stage: "New",
     qualityScore: 94,
-    recoverableValue: 125000
+    recoverableValue: 125000,
+    auditTrail: [
+      { id: "AUD-1", timestamp: new Date(2024, 3, 5, 10, 30), action: "Case Created", actor: "System", newStage: "New" }
+    ],
+    comments: [],
+    unreadMajorChanges: true
   },
   {
     id: "CASE-8822",
@@ -161,13 +217,29 @@ export const MOCK_CASES: Case[] = [
       obstructionFlags: "Partial obstruction by stage lighting. Audio remains clear.",
       performanceContext: "Corporate mixer, semi-private setting."
     },
+    evidenceVaults: [
+      {
+        id: "VAULT-1",
+        name: "Evidence Vault 1",
+        timestamp: new Date(2024, 3, 5, 0, 15),
+        videoUrl: "https://assets.mixkit.co/videos/preview/mixkit-crowd-at-a-concert-with-lights-4353-large.mp4",
+        images: [
+          "https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=400&h=300&fit=crop"
+        ],
+        notes: "Initial capture."
+      }
+    ],
     chainOfCustody: [
       { timestamp: "2024-04-05T00:15:05Z", event: "Initial Capture", actor: "Field Device #112", hash: "sha256:f4a1d223...", deviceId: "DEV-X11-02", status: "Verified" },
       { timestamp: "2024-04-05T00:16:30Z", event: "Clock Skew Check", actor: "Trust-Gate-B", hash: "skew_detected:1.2s", deviceId: "SRV-TR-02", status: "Pending" }
     ],
     stage: "New",
     qualityScore: 72,
-    recoverableValue: 45000
+    recoverableValue: 45000,
+    auditTrail: [
+      { id: "AUD-2", timestamp: new Date(2024, 3, 5, 0, 15), action: "Case Created", actor: "System", newStage: "New" }
+    ],
+    comments: []
   },
   {
     id: "CASE-8823",
@@ -210,13 +282,30 @@ export const MOCK_CASES: Case[] = [
       obstructionFlags: "No obstructions. Clear view of the dance floor and DJ setup.",
       performanceContext: "Saturday night, full capacity."
     },
+    evidenceVaults: [
+      {
+        id: "VAULT-1",
+        name: "Evidence Vault 1",
+        timestamp: new Date(2024, 3, 4, 22, 0),
+        videoUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-at-a-party-4352-large.mp4",
+        images: [
+          "https://images.unsplash.com/photo-1524368535928-5b5e00ddc76b?w=400&h=300&fit=crop"
+        ],
+        notes: "Initial capture."
+      }
+    ],
     chainOfCustody: [
       { timestamp: "2024-04-04T22:00:01Z", event: "Initial Capture", actor: "Field Device #881", hash: "sha256:b2c1a334...", deviceId: "DEV-X88-05", status: "Verified" },
       { timestamp: "2024-04-04T22:01:20Z", event: "Server Ingestion", actor: "Ingest-Node-01", hash: "sha256:b2c1a334...", deviceId: "SRV-IN-01", status: "Verified" }
     ],
     stage: "New",
     qualityScore: 98,
-    recoverableValue: 210000
+    recoverableValue: 210000,
+    auditTrail: [
+      { id: "AUD-3", timestamp: new Date(2024, 3, 4, 22, 0), action: "Case Created", actor: "System", newStage: "New" }
+    ],
+    comments: [],
+    unreadComments: true
   },
   {
     id: "CASE-8824",
@@ -257,11 +346,108 @@ export const MOCK_CASES: Case[] = [
       obstructionFlags: "None",
       performanceContext: "Live detection"
     },
+    evidenceVaults: [
+      {
+        id: "VAULT-1",
+        name: "Evidence Vault 1",
+        timestamp: new Date(),
+        videoUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-in-a-nightclub-4351-large.mp4",
+        images: [],
+        notes: "Live capture."
+      }
+    ],
     chainOfCustody: [
       { timestamp: new Date().toISOString(), event: "Live Capture", actor: "Field Device #990", hash: "sha256:live_hash...", deviceId: "DEV-LIVE-01", status: "Verified" }
     ],
     stage: "New",
     qualityScore: 88,
-    recoverableValue: 95000
+    recoverableValue: 95000,
+    auditTrail: [
+      { id: "AUD-4", timestamp: new Date(), action: "Case Created", actor: "System", newStage: "New" }
+    ],
+    comments: []
+  },
+  {
+    id: "CASE-7710",
+    isNew: false,
+    timestamp: new Date(2023, 10, 15, 21, 0),
+    location: { 
+      name: "Blue Lagoon Restobar", 
+      lat: 19.0760, 
+      lng: 72.8777, 
+      city: "Mumbai",
+      address: "Plot No. 12, Juhu Tara Rd, Mumbai, Maharashtra 400049",
+      phone: "+91 22 2611 1234",
+      email: "contact@bluelagoon.in"
+    },
+    pastOffences: 1,
+    expectedFine: 25000,
+    musicLabel: "T-Series",
+    videoProofUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-in-a-nightclub-4351-large.mp4",
+    aiExplanation: "Historical infraction. Settled out of court.",
+    trustGates: { mediaHashKey: true, payloadSignature: true, clockSkewDetection: true, geofencingContinuity: true, deviceTrustBand: true },
+    songAssessment: { title: "Jai Ho", artists: ["A.R. Rahman"], labelOwner: "T-Series", isrc: "IN-T12-08-00001", upc: "8901234560001", rightsAssociation: "IPRS" },
+    absoluteProof: { smallVideoUrl: "", venueImages: [], obstructionFlags: "None", performanceContext: "Historical record" },
+    evidenceVaults: [
+      {
+        id: "VAULT-1",
+        name: "Evidence Vault 1",
+        timestamp: new Date(2023, 10, 15, 21, 0),
+        videoUrl: "",
+        images: [],
+        notes: "Historical vault."
+      }
+    ],
+    chainOfCustody: [],
+    stage: "Closed",
+    qualityScore: 90,
+    recoverableValue: 50000,
+    auditTrail: [
+      { id: "AUD-5", timestamp: new Date(2023, 10, 15, 21, 0), action: "Case Created", actor: "System", newStage: "New" },
+      { id: "AUD-6", timestamp: new Date(2023, 10, 20, 10, 0), action: "Case Closed", actor: "Admin", previousStage: "Recovery In Progress", newStage: "Closed" }
+    ],
+    comments: [
+      { id: "COM-1", timestamp: new Date(2023, 10, 16, 14, 0), author: "Admin", text: "Settlement reached.", role: "Admin" }
+    ]
+  },
+  {
+    id: "CASE-7711",
+    isNew: false,
+    timestamp: new Date(2024, 1, 20, 22, 30),
+    location: { 
+      name: "Blue Lagoon Restobar", 
+      lat: 19.0760, 
+      lng: 72.8777, 
+      city: "Mumbai",
+      address: "Plot No. 12, Juhu Tara Rd, Mumbai, Maharashtra 400049",
+      phone: "+91 22 2611 1234",
+      email: "contact@bluelagoon.in"
+    },
+    pastOffences: 2,
+    expectedFine: 35000,
+    musicLabel: "Zee Music Co.",
+    videoProofUrl: "https://assets.mixkit.co/videos/preview/mixkit-people-dancing-in-a-nightclub-4351-large.mp4",
+    aiExplanation: "Second infraction. Legal notice served.",
+    trustGates: { mediaHashKey: true, payloadSignature: true, clockSkewDetection: true, geofencingContinuity: true, deviceTrustBand: true },
+    songAssessment: { title: "Kala Chashma", artists: ["Badshah"], labelOwner: "Zee Music Co.", isrc: "IN-Z13-16-00001", upc: "8901234561111", rightsAssociation: "IPRS" },
+    absoluteProof: { smallVideoUrl: "", venueImages: [], obstructionFlags: "None", performanceContext: "Historical record" },
+    evidenceVaults: [
+      {
+        id: "VAULT-1",
+        name: "Evidence Vault 1",
+        timestamp: new Date(2024, 1, 20, 22, 30),
+        videoUrl: "",
+        images: [],
+        notes: "Historical vault."
+      }
+    ],
+    chainOfCustody: [],
+    stage: "Recovery In Progress",
+    qualityScore: 92,
+    recoverableValue: 75000,
+    auditTrail: [
+      { id: "AUD-7", timestamp: new Date(2024, 1, 20, 22, 30), action: "Case Created", actor: "System", newStage: "New" }
+    ],
+    comments: []
   }
 ];
