@@ -56,10 +56,28 @@ import {
   Send,
   Link,
   History,
+  Trophy,
+  TrendingUp,
+  Target,
   X
 } from 'lucide-react';
+import { 
+  ResponsiveContainer, 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  BarChart, 
+  Bar, 
+  PieChart, 
+  Pie, 
+  Cell,
+  Legend
+} from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, Polyline } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, Polyline, Tooltip as LeafletTooltip } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet.heat';
 import { format } from 'date-fns';
@@ -102,6 +120,15 @@ let DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 type FilterType = 'time' | 'location' | 'offences' | 'fine' | 'label' | 'quality';
+
+const VALID_TRANSITIONS: Record<CaseStage, CaseStage[]> = {
+  'New': ['Under Review'],
+  'Under Review': ['Agent Assignment', 'Ready For Legal', 'Recovery In Progress', 'Closed'],
+  'Agent Assignment': ['Under Review', 'Recovery In Progress', 'Agent Assignment'], // Self-assignment for notes
+  'Ready For Legal': ['Under Review', 'Closed', 'Ready For Legal'],
+  'Recovery In Progress': ['Under Review', 'Closed', 'Ready For Legal', 'Recovery In Progress'],
+  'Closed': ['Under Review']
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'cases' | 'map' | 'progress' | 'agent' | 'litigation' | 'reports'>('cases');
@@ -163,6 +190,12 @@ export default function App() {
     
     setAllCases(prev => prev.map(c => {
       if (c.id === id) {
+        // Prevent unauthorized teleportation between stages
+        if (c.stage !== newStage && !VALID_TRANSITIONS[c.stage].includes(newStage)) {
+          console.warn(`[Security] Unauthorized stage transition blocked: ${c.stage} -> ${newStage}`);
+          return c;
+        }
+
         const assignedTo = assignmentType === 'Agent' 
           ? agents[Math.floor(Math.random() * agents.length)]
           : assignmentType === 'Lawyer'
@@ -191,7 +224,10 @@ export default function App() {
           resolvedByAgentName: resolvedByAgentName || c.resolvedByAgentName,
           selectedVaultIds: selectedVaultIds || c.selectedVaultIds,
           auditTrail: [...c.auditTrail, auditEntry],
-          unreadMajorChanges: true
+          // Sync update: If user is acting on this case, clear current notification flags
+          // to prevent race conditions with background effect tasks
+          unreadMajorChanges: false,
+          unreadComments: false
         };
       }
       return c;
@@ -216,6 +252,7 @@ export default function App() {
       }
       return c;
     }));
+    addNotification(`New message in Case ${id}: ${text.substring(0, 30)}${text.length > 30 ? '...' : ''}`, 'info');
   };
 
   const onDragEnd = (event: DragEndEvent) => {
@@ -288,8 +325,8 @@ export default function App() {
   const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'major' | 'info' }[]>([]);
 
   const addNotification = (message: string, type: 'major' | 'info' = 'info') => {
-    const id = `NOTIF-${Date.now()}`;
-    setNotifications(prev => [...prev, { id, message, type }]);
+    const id = `NOTIF-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    setNotifications(prev => [...prev.filter(n => n.message !== message), { id, message, type }]);
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
     }, 5000);
@@ -481,64 +518,44 @@ export default function App() {
           <div className="pb-2 px-3">
             <p className="hidden md:block text-[10px] font-bold uppercase tracking-widest text-slate-500">Main</p>
           </div>
-          <button 
-            onClick={() => setActiveTab('cases')}
-            className={cn(
-              "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label",
-              activeTab === 'cases' ? "bg-white/5 text-text-primary shadow-sm" : "text-text-tertiary hover:bg-white/[0.02] hover:text-text-secondary"
-            )}
-          >
-            <Inbox className="w-4 h-4" />
-            <span className="hidden md:block">Cases</span>
-          </button>
-          <button 
-            onClick={() => setActiveTab('map')}
-            className={cn(
-              "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label",
-              activeTab === 'map' ? "bg-white/5 text-text-primary shadow-sm" : "text-text-tertiary hover:bg-white/[0.02] hover:text-text-secondary"
-            )}
-          >
-            <MapIcon className="w-4 h-4" />
-            <span className="hidden md:block">Map Intelligence</span>
-          </button>
+          <NavItem 
+            active={activeTab === 'cases'} 
+            onClick={() => setActiveTab('cases')} 
+            icon={<Inbox className="w-4 h-4" />} 
+            label="Cases" 
+          />
+          <NavItem 
+            active={activeTab === 'map'} 
+            onClick={() => setActiveTab('map')} 
+            icon={<MapIcon className="w-4 h-4" />} 
+            label="Map Intelligence" 
+          />
           
           {userRole === 'Admin' && (
-            <button 
-              onClick={() => setActiveTab('progress')}
-              className={cn(
-                "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label",
-                activeTab === 'progress' ? "bg-white/5 text-text-primary shadow-sm" : "text-text-tertiary hover:bg-white/[0.02] hover:text-text-secondary"
-              )}
-            >
-              <Columns className="w-4 h-4" />
-              <span className="hidden md:block">Progress</span>
-            </button>
+            <NavItem 
+              active={activeTab === 'progress'} 
+              onClick={() => setActiveTab('progress')} 
+              icon={<Columns className="w-4 h-4" />} 
+              label="Progress" 
+            />
           )}
 
           {(userRole === 'Admin' || userRole === 'Agent') && (
-            <button 
-              onClick={() => setActiveTab('agent')}
-              className={cn(
-                "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label",
-                activeTab === 'agent' ? "bg-white/5 text-text-primary shadow-sm" : "text-text-tertiary hover:bg-white/[0.02] hover:text-text-secondary"
-              )}
-            >
-              <Smartphone className="w-4 h-4" />
-              <span className="hidden md:block">Agent Window</span>
-            </button>
+            <NavItem 
+              active={activeTab === 'agent'} 
+              onClick={() => setActiveTab('agent')} 
+              icon={<Smartphone className="w-4 h-4" />} 
+              label="Agent Window" 
+            />
           )}
 
           {(userRole === 'Admin' || userRole === 'Lawyer') && (
-            <button 
-              onClick={() => setActiveTab('litigation')}
-              className={cn(
-                "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label",
-                activeTab === 'litigation' ? "bg-white/5 text-text-primary shadow-sm" : "text-text-tertiary hover:bg-white/[0.02] hover:text-text-secondary"
-              )}
-            >
-              <Gavel className="w-4 h-4" />
-              <span className="hidden md:block">Litigation Window</span>
-            </button>
+            <NavItem 
+              active={activeTab === 'litigation'} 
+              onClick={() => setActiveTab('litigation')} 
+              icon={<Gavel className="w-4 h-4" />} 
+              label="Litigation Window" 
+            />
           )}
 
           {userRole === 'Admin' && (
@@ -546,16 +563,12 @@ export default function App() {
               <div className="pt-6 pb-2 px-3">
                 <p className="hidden md:block text-tiny uppercase tracking-widest text-text-quaternary">Management</p>
               </div>
-              <button 
-                onClick={() => setActiveTab('reports')}
-                className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label",
-                  activeTab === 'reports' ? "bg-white/5 text-text-primary shadow-sm" : "text-text-tertiary hover:bg-white/[0.02] hover:text-text-secondary"
-                )}
-              >
-                <BarChart3 className="w-4 h-4" />
-                <span className="hidden md:block">Reports</span>
-              </button>
+              <NavItem 
+                active={activeTab === 'reports'} 
+                onClick={() => setActiveTab('reports')} 
+                icon={<BarChart3 className="w-4 h-4" />} 
+                label="Reports" 
+              />
             </>
           )}
         </nav>
@@ -593,340 +606,433 @@ export default function App() {
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        {activeTab === 'cases' ? (
-          <div className="flex flex-1 overflow-hidden">
-            {/* Inbox List */}
-            <div className="w-full md:w-80 lg:w-[400px] border-r border-border-subtle flex flex-col bg-bg-panel">
-              <div className="p-5 border-b border-border-subtle space-y-4 bg-white/[0.01]">
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col">
-                    <h2 className="text-h3 text-text-primary">
-                      Global Cases
-                    </h2>
-                  </div>
-                  <div className="flex gap-1">
-                    <button 
-                      onClick={() => setIsLiveMode(!isLiveMode)}
-                      className={cn(
-                        "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-tiny font-black uppercase tracking-widest transition-all",
-                        isLiveMode ? "bg-red-600 text-white animate-pulse" : "bg-white/5 text-text-tertiary hover:bg-white/10"
-                      )}
-                    >
-                      <Zap className={cn("w-3 h-3", isLiveMode ? "fill-current" : "")} />
-                      {isLiveMode ? 'Live' : 'Go Live'}
-                    </button>
-                  </div>
-                </div>
-                
-                {userRole !== 'Agent' && (
-                  <div className="flex gap-1 bg-white/[0.02] p-1 rounded-lg border border-border-standard">
-                    {(['upcoming', 'active', 'closed'] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => setListTab(tab)}
-                        className={cn(
-                          "flex-1 py-1.5 text-tiny font-black uppercase tracking-widest rounded-md transition-all",
-                          listTab === tab ? "bg-white/10 text-text-primary shadow-sm" : "text-text-quaternary hover:text-text-secondary"
-                        )}
-                      >
-                        {tab}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-quaternary" />
-                <input 
-                  type="text" 
-                  placeholder="Search cases, venues, ISRC..." 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-transparent border border-border-standard rounded-md text-caption text-text-primary focus:border-accent-violet transition-all outline-none placeholder:text-text-quaternary"
-                />
-              </div>
-                
-                {/* Filters/Sort Bar */}
-                <div className="flex flex-wrap gap-1.5">
-                  <FilterButton 
-                    active={sortBy === 'time'} 
-                    onClick={() => toggleSort('time')}
-                    icon={<Clock className="w-3 h-3" />}
-                    label="Time"
-                    order={sortBy === 'time' ? sortOrder : null}
-                  />
-                  <FilterButton 
-                    active={sortBy === 'location'} 
-                    onClick={() => toggleSort('location')}
-                    icon={<MapPin className="w-3 h-3" />}
-                    label="Location"
-                    order={sortBy === 'location' ? sortOrder : null}
-                  />
-                  <FilterButton 
-                    active={sortBy === 'offences'} 
-                    onClick={() => toggleSort('offences')}
-                    icon={<AlertCircle className="w-3 h-3" />}
-                    label="Offences"
-                    order={sortBy === 'offences' ? sortOrder : null}
-                  />
-                  <FilterButton 
-                    active={sortBy === 'fine'} 
-                    onClick={() => toggleSort('fine')}
-                    icon={<IndianRupee className="w-3 h-3" />}
-                    label="Fine"
-                    order={sortBy === 'fine' ? sortOrder : null}
-                  />
-                  <FilterButton 
-                    active={sortBy === 'label'} 
-                    onClick={() => toggleSort('label')}
-                    icon={<Music className="w-3 h-3" />}
-                    label="Label"
-                    order={sortBy === 'label' ? sortOrder : null}
-                  />
-                  <FilterButton 
-                    active={sortBy === 'quality'} 
-                    onClick={() => toggleSort('quality')}
-                    icon={<Star className="w-3 h-3" />}
-                    label="Quality"
-                    order={sortBy === 'quality' ? sortOrder : null}
-                  />
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto">
-                {sortedCases.map((c) => (
-                  <CaseListItem 
-                    key={c.id} 
-                    caseData={c} 
-                    isSelected={selectedCaseId === c.id}
-                    onClick={() => handleSelectCase(c.id)}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Case Detail */}
-            <div className="flex-1 overflow-y-auto bg-bg-marketing p-8 lg:p-12">
-              {selectedCase ? (
-                <CaseDetailView 
-                  caseData={selectedCase} 
-                  onUpdateStage={updateCaseStage}
-                  addComment={addComment}
-                  userRole={userRole}
-                  clearNotification={clearNotification}
-                  onCreateVault={createEvidenceVault}
-                  onDeleteVault={(vId) => setVaultToDelete({ caseId: selectedCase.id, vaultId: vId })}
-                  onRequestMoreProof={(vId) => requestMoreProof(selectedCase.id, vId)}
-                  setActiveTab={setActiveTab}
-                  setListTab={setListTab}
-                  onSelectCase={handleSelectCase}
-                  addToRoute={(cId) => {
-                    if (!routeCaseIds.includes(cId)) {
-                      setRouteCaseIds([...routeCaseIds, cId]);
-                    }
-                  }}
-                  removeFromRoute={(cId) => {
-                    setRouteCaseIds(routeCaseIds.filter(id => id !== cId));
-                  }}
-                  isInRoute={routeCaseIds.includes(selectedCase.id)}
-                />
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-text-quaternary">
-                  <Inbox className="w-16 h-16 mb-4 opacity-10" />
-                  <p className="text-label uppercase tracking-widest opacity-20">No Case Selected</p>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : activeTab === 'map' ? (
-          <div className="flex-1 relative">
-            <div className="absolute top-6 left-6 z-[1000] bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl w-80">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-sm font-black text-white flex items-center gap-2 uppercase tracking-widest">
-                  <Activity className="w-4 h-4 text-blue-400" />
-                  Map Intelligence
-                </h3>
-                <div className="flex bg-slate-800 p-1 rounded-lg">
-                  <button 
-                    onClick={() => setMapMode('hotspots')}
-                    className={cn(
-                      "px-3 py-1 text-[10px] font-bold rounded-md transition-all",
-                      mapMode === 'hotspots' ? "bg-slate-700 text-blue-400 shadow-sm" : "text-slate-400 hover:text-slate-200"
-                    )}
-                  >
-                    Hotspots
-                  </button>
-                  <button 
-                    onClick={() => setMapMode('revenue')}
-                    className={cn(
-                      "px-3 py-1 text-[10px] font-bold rounded-md transition-all",
-                      mapMode === 'revenue' ? "bg-slate-700 text-blue-400 shadow-sm" : "text-slate-400 hover:text-slate-200"
-                    )}
-                  >
-                    Revenue
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-5">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Live Detection</span>
-                    <button 
-                      onClick={() => setIsLiveMode(!isLiveMode)}
-                      className={cn(
-                        "w-10 h-5 rounded-full relative transition-all",
-                        isLiveMode ? "bg-blue-600" : "bg-slate-700"
-                      )}
-                    >
-                      <div className={cn(
-                        "absolute top-1 w-3 h-3 bg-white rounded-full transition-all",
-                        isLiveMode ? "left-6" : "left-1"
-                      )} />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Heatmap Intensity</span>
-                    <span className="text-[10px] font-black text-white">HIGH</span>
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-slate-800">
-                   <div className="flex items-center gap-2 mb-3">
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                      <p className="text-[11px] font-bold text-slate-200">
-                        {isLiveMode ? 'Monitoring live streams...' : 'Static analysis mode'}
-                      </p>
-                   </div>
-                   <p className="text-[10px] text-slate-400 leading-relaxed">
-                     {mapMode === 'hotspots' 
-                        ? 'Visualizing individual infringement events with real-time trust verification.' 
-                        : 'Aggregating unrecovered licensing revenue density across urban centers.'}
-                   </p>
-                </div>
-              </div>
-            </div>
-
-            <MapContainer center={[20.5937, 78.9629]} zoom={5} scrollWheelZoom={true} className="z-0">
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              />
-              
-              {mapMode === 'revenue' && (
-                <HeatmapLayer 
-                  points={allCases.map(c => [c.location.lat, c.location.lng, c.recoverableValue / 10000])} 
-                />
-              )}
-
-              {mapMode === 'hotspots' && allCases.map((c) => (
-                <React.Fragment key={c.id}>
-                  <CircleMarker 
-                    center={[c.location.lat, c.location.lng]}
-                    radius={isLiveMode && c.isNew ? 30 : 20}
-                    pathOptions={{ 
-                      fillColor: 
-                        c.stage === 'New' ? '#3b82f6' : 
-                        c.stage === 'Under Review' ? '#f59e0b' :
-                        c.stage === 'Agent Assignment' ? '#06b6d4' :
-                        c.stage === 'Ready For Legal' ? '#10b981' :
-                        c.stage === 'Recovery In Progress' ? '#a855f7' : '#64748b', 
-                      fillOpacity: isLiveMode && c.isNew ? 0.3 : 0.15, 
-                      color: 'transparent' 
-                    }}
-                    className={cn(isLiveMode && c.isNew ? "animate-pulse-live" : "")}
-                  />
-                  <Marker position={[c.location.lat, c.location.lng]}>
-                    <Popup className="custom-popup">
-                      <div className="p-5 min-w-[280px]">
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] font-black text-blue-700 uppercase tracking-widest">{c.id}</span>
-                            <span className="text-[9px] text-slate-400 font-bold">{format(c.timestamp, 'HH:mm')}</span>
-                          </div>
-                          <span className={cn(
-                            "px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-widest",
-                            c.stage === 'New' ? "bg-blue-900/40 text-blue-400" : 
-                            c.stage === 'Under Review' ? "bg-amber-900/40 text-amber-400" :
-                            c.stage === 'Agent Assignment' ? "bg-cyan-900/40 text-cyan-400" :
-                            c.stage === 'Ready For Legal' ? "bg-emerald-900/40 text-emerald-400" :
-                            c.stage === 'Recovery In Progress' ? "bg-purple-900/40 text-purple-400" :
-                            "bg-slate-900/40 text-slate-400"
-                          )}>{c.stage}</span>
-                        </div>
-                        <h4 className="font-black text-white text-base mb-1 tracking-tight">{c.location.name}</h4>
-                        <p className="text-xs text-slate-400 font-bold mb-5 flex items-center gap-1">
-                          <MapPin className="w-3 h-3" />
-                          {c.location.city}
-                        </p>
-                        
-                        <div className="grid grid-cols-2 gap-6 py-4 border-y border-slate-800">
-                          <div>
-                            <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest mb-1">Potential</p>
-                            <p className="text-sm font-black text-white">₹{c.recoverableValue.toLocaleString()}</p>
-                          </div>
-                          <div>
-                            <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest mb-1">Quality</p>
-                            <p className="text-sm font-black text-white">{c.qualityScore}%</p>
-                          </div>
-                        </div>
-                        
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, scale: 0.99, y: 5 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 1.01, y: -5 }}
+            transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
+            className="flex-1 flex flex-col overflow-hidden"
+          >
+            {activeTab === 'cases' ? (
+              <div className="flex flex-1 overflow-hidden">
+                {/* Inbox List */}
+                <div className="w-full md:w-80 lg:w-[400px] border-r border-border-subtle flex flex-col bg-bg-panel">
+                  <div className="p-5 border-b border-border-subtle space-y-4 bg-white/[0.01]">
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <h2 className="text-h3 text-text-primary">
+                          Global Cases
+                        </h2>
+                      </div>
+                      <div className="flex gap-1">
                         <button 
-                          onClick={() => {
-                            handleSelectCase(c.id);
-                            setActiveTab('cases');
-                          }}
-                          className="w-full mt-5 py-3 bg-blue-700 text-white text-[11px] font-black uppercase tracking-widest rounded-lg hover:bg-blue-800 transition-all shadow-lg shadow-blue-700/20"
+                          onClick={() => setIsLiveMode(!isLiveMode)}
+                          className={cn(
+                            "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-tiny font-black uppercase tracking-widest transition-all",
+                            isLiveMode ? "bg-red-600 text-white animate-pulse" : "bg-white/5 text-text-tertiary hover:bg-white/10"
+                          )}
                         >
-                          Access Evidence Vault
+                          <Zap className={cn("w-3 h-3", isLiveMode ? "fill-current" : "")} />
+                          {isLiveMode ? 'Live' : 'Go Live'}
                         </button>
                       </div>
-                    </Popup>
-                  </Marker>
-                </React.Fragment>
-              ))}
-            </MapContainer>
-          </div>
-        ) : activeTab === 'progress' ? (
-          <KanbanBoard 
-            cases={allCases} 
-            onSelectCase={(id) => {
-              handleSelectCase(id);
-              setActiveTab('cases');
-            }}
-            onDragEnd={onDragEnd}
-            invalidMoveId={invalidMoveId}
-          />
-        ) : activeTab === 'agent' ? (
-          <AgentDashboard 
-            cases={allCases.filter(c => c.stage === 'Agent Assignment')} 
-            onSelectCase={handleSelectCase}
-            onUpdateStage={updateCaseStage}
-            setActiveTab={setActiveTab}
-            addComment={addComment}
-            onCreateVault={createEvidenceVault}
-            routeCaseIds={routeCaseIds}
-            setRouteCaseIds={setRouteCaseIds}
-            removeFromRoute={(cId) => {
-              setRouteCaseIds(routeCaseIds.filter(id => id !== cId));
-            }}
-          />
-        ) : activeTab === 'reports' ? (
-          <ReportsDashboard allCases={allCases} />
-        ) : activeTab === 'litigation' ? (
-          <LitigationDashboard 
-            allCases={allCases} 
-            onSelectCase={handleSelectCase}
-            onUpdateStage={updateCaseStage}
-            setActiveTab={setActiveTab}
-            onAddComment={addComment}
-            addNotification={addNotification}
-            userRole={userRole}
-            onDeleteVault={(cId, vId) => setVaultToDelete({ caseId: cId, vaultId: vId })}
-            onRequestMoreProof={(cId, vId) => requestMoreProof(cId, vId)}
-          />
-        ) : null}
+                    </div>
+                    
+                    {userRole !== 'Agent' && (
+                      <div className="flex gap-1 bg-white/[0.02] p-1 rounded-lg border border-border-standard">
+                        {(['upcoming', 'active', 'closed'] as const).map((tab) => (
+                          <button
+                            key={tab}
+                            onClick={() => setListTab(tab)}
+                            className={cn(
+                              "flex-1 py-1.5 text-tiny font-black uppercase tracking-widest rounded-md transition-all relative z-10",
+                              listTab === tab ? "text-text-primary" : "text-text-quaternary hover:text-text-secondary"
+                            )}
+                          >
+                            {listTab === tab && (
+                              <motion.div 
+                                layoutId="list-tab-bg"
+                                className="absolute inset-0 bg-white/10 rounded-md -z-10 shadow-sm"
+                                transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
+                              />
+                            )}
+                            {tab}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-quaternary" />
+                    <input 
+                      type="text" 
+                      placeholder="Search cases, venues, ISRC..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 bg-transparent border border-border-standard rounded-md text-caption text-text-primary focus:border-accent-violet transition-all outline-none placeholder:text-text-quaternary"
+                    />
+                  </div>
+                    
+                    {/* Filters/Sort Bar */}
+                    <div className="flex flex-wrap gap-1.5">
+                      <FilterButton 
+                        active={sortBy === 'time'} 
+                        onClick={() => toggleSort('time')}
+                        icon={<Clock className="w-3 h-3" />}
+                        label="Time"
+                        order={sortBy === 'time' ? sortOrder : null}
+                      />
+                      <FilterButton 
+                        active={sortBy === 'location'} 
+                        onClick={() => toggleSort('location')}
+                        icon={<MapPin className="w-3 h-3" />}
+                        label="Location"
+                        order={sortBy === 'location' ? sortOrder : null}
+                      />
+                      <FilterButton 
+                        active={sortBy === 'offences'} 
+                        onClick={() => toggleSort('offences')}
+                        icon={<AlertCircle className="w-3 h-3" />}
+                        label="Offences"
+                        order={sortBy === 'offences' ? sortOrder : null}
+                      />
+                      <FilterButton 
+                        active={sortBy === 'fine'} 
+                        onClick={() => toggleSort('fine')}
+                        icon={<IndianRupee className="w-3 h-3" />}
+                        label="Fine"
+                        order={sortBy === 'fine' ? sortOrder : null}
+                      />
+                      <FilterButton 
+                        active={sortBy === 'label'} 
+                        onClick={() => toggleSort('label')}
+                        icon={<Music className="w-3 h-3" />}
+                        label="Label"
+                        order={sortBy === 'label' ? sortOrder : null}
+                      />
+                      <FilterButton 
+                        active={sortBy === 'quality'} 
+                        onClick={() => toggleSort('quality')}
+                        icon={<Star className="w-3 h-3" />}
+                        label="Quality"
+                        order={sortBy === 'quality' ? sortOrder : null}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto">
+                    {sortedCases.map((c) => (
+                      <CaseListItem 
+                        key={c.id} 
+                        caseData={c} 
+                        isSelected={selectedCaseId === c.id}
+                        onClick={() => handleSelectCase(c.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Case Detail */}
+                <div className="flex-1 overflow-y-auto bg-bg-marketing p-8 lg:p-12">
+                  <AnimatePresence mode="wait">
+                    {selectedCase ? (
+                      <motion.div
+                        key={selectedCase.id}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        <CaseDetailView 
+                          caseData={selectedCase} 
+                          onUpdateStage={updateCaseStage}
+                          addComment={addComment}
+                          userRole={userRole}
+                          clearNotification={clearNotification}
+                          onCreateVault={createEvidenceVault}
+                          onDeleteVault={(vId) => setVaultToDelete({ caseId: selectedCase.id, vaultId: vId })}
+                          onRequestMoreProof={(vId) => requestMoreProof(selectedCase.id, vId)}
+                          setActiveTab={setActiveTab}
+                          setListTab={setListTab}
+                          onSelectCase={handleSelectCase}
+                          addToRoute={(cId) => {
+                            if (!routeCaseIds.includes(cId)) {
+                              setRouteCaseIds([...routeCaseIds, cId]);
+                            }
+                          }}
+                          removeFromRoute={(cId) => {
+                            setRouteCaseIds(routeCaseIds.filter(id => id !== cId));
+                          }}
+                          isInRoute={routeCaseIds.includes(selectedCase.id)}
+                        />
+                      </motion.div>
+                    ) : (
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="h-full flex flex-col items-center justify-center text-text-quaternary"
+                      >
+                        <Inbox className="w-16 h-16 mb-4 opacity-10" />
+                        <p className="text-label uppercase tracking-widest opacity-20">No Case Selected</p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+            ) : activeTab === 'map' ? (
+              <div className="flex-1 relative">
+                <div className="absolute top-6 left-6 z-[1000] bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl w-80">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-sm font-black text-white flex items-center gap-2 uppercase tracking-widest">
+                      <Activity className="w-4 h-4 text-blue-400" />
+                      Map Intelligence
+                    </h3>
+                    <div className="flex bg-slate-800 p-1 rounded-lg">
+                      <button 
+                        onClick={() => setMapMode('hotspots')}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded-md transition-all relative z-10",
+                          mapMode === 'hotspots' ? "text-blue-400" : "text-slate-400 hover:text-slate-200"
+                        )}
+                      >
+                        {mapMode === 'hotspots' && (
+                          <motion.div 
+                            layoutId="map-mode-bg"
+                            className="absolute inset-0 bg-slate-700 rounded-md -z-10 shadow-sm"
+                          />
+                        )}
+                        Hotspots
+                      </button>
+                      <button 
+                        onClick={() => setMapMode('revenue')}
+                        className={cn(
+                          "px-3 py-1 text-[10px] font-bold rounded-md transition-all relative z-10",
+                          mapMode === 'revenue' ? "text-blue-400" : "text-slate-400 hover:text-slate-200"
+                        )}
+                      >
+                        {mapMode === 'revenue' && (
+                          <motion.div 
+                            layoutId="map-mode-bg"
+                            className="absolute inset-0 bg-slate-700 rounded-md -z-10 shadow-sm"
+                          />
+                        )}
+                        Revenue
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-5">
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Live Detection</span>
+                        <button 
+                          onClick={() => setIsLiveMode(!isLiveMode)}
+                          className={cn(
+                            "w-10 h-5 rounded-full relative transition-all",
+                            isLiveMode ? "bg-blue-600" : "bg-slate-700"
+                          )}
+                        >
+                          <motion.div 
+                            layout
+                            className={cn(
+                              "absolute top-1 w-3 h-3 bg-white rounded-full",
+                              isLiveMode ? "left-6" : "left-1"
+                            )} 
+                            transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                          />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Heatmap Intensity</span>
+                        <span className="text-[10px] font-black text-white">HIGH</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-800">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                        <p className="text-[11px] font-bold text-slate-200">
+                          {isLiveMode ? 'Monitoring live streams...' : 'Static analysis mode'}
+                        </p>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        {mapMode === 'hotspots' 
+                            ? 'Visualizing individual infringement events with real-time trust verification.' 
+                            : 'Aggregating unrecovered licensing revenue density across urban centers.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <MapContainer center={[20.5937, 78.9629]} zoom={5} scrollWheelZoom={true} className="z-0">
+                  <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                  />
+                  
+                  <MapBoundsUpdater 
+                    points={allCases.map(c => [c.location.lat, c.location.lng] as [number, number])} 
+                  />
+
+                  {mapMode === 'revenue' && (
+                    <HeatmapLayer 
+                      points={allCases.map(c => [c.location.lat, c.location.lng, c.recoverableValue / 10000] as [number, number, number])} 
+                    />
+                  )}
+
+                  {mapMode === 'hotspots' && (
+                    <Polyline 
+                      positions={allCases
+                        .filter(c => c.stage !== 'Closed')
+                        .sort((a,b) => b.expectedFine - a.expectedFine)
+                        .slice(0, 5)
+                        .map(c => [c.location.lat, c.location.lng] as [number, number])} 
+                      pathOptions={{ color: '#3b82f6', weight: 1, opacity: 0.3, dashArray: '5, 10' }}
+                    />
+                  )}
+
+                  {mapMode === 'hotspots' && allCases.map((c) => (
+                    <React.Fragment key={c.id}>
+                      <CircleMarker 
+                        center={[c.location.lat, c.location.lng]}
+                        radius={isLiveMode && c.isNew ? 30 : 20}
+                        pathOptions={{ 
+                          fillColor: 
+                            c.stage === 'New' ? '#3b82f6' : 
+                            c.stage === 'Under Review' ? '#f59e0b' :
+                            c.stage === 'Agent Assignment' ? '#06b6d4' :
+                            c.stage === 'Ready For Legal' ? '#10b981' :
+                            c.stage === 'Recovery In Progress' ? '#a855f7' : '#64748b', 
+                          fillOpacity: isLiveMode && c.isNew ? 0.3 : 0.15, 
+                          color: 'transparent' 
+                        }}
+                        className={cn(isLiveMode && c.isNew ? "animate-pulse-live" : "")}
+                      >
+                        <LeafletTooltip direction="top" offset={L.point(0, -20)} opacity={1} permanent={false}>
+                          <div className="bg-slate-950 border border-slate-800 p-2 rounded-lg shadow-xl text-white min-w-[140px]">
+                             <p className="text-[10px] font-black uppercase text-blue-400 mb-0.5">{c.id}</p>
+                             <p className="text-xs font-black leading-tight mb-1">{c.location.name}</p>
+                             <div className="flex items-center justify-between gap-3 pt-1 border-t border-white/5">
+                               <span className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Value: ₹{(c.expectedFine/1000).toFixed(0)}k</span>
+                               <span className={cn(
+                                 "text-[8px] font-black uppercase px-1 rounded",
+                                 c.stage === 'New' ? "text-blue-400 bg-blue-400/10" : "text-emerald-400 bg-emerald-400/10"
+                               )}>{c.stage.split(' ')[0]}</span>
+                             </div>
+                          </div>
+                        </LeafletTooltip>
+                      </CircleMarker>
+                      <Marker 
+                        position={[c.location.lat, c.location.lng]}
+                        icon={L.divIcon({
+                          className: 'custom-marker-icon',
+                          html: `<div class="marker-pin-wrapper" style="position: relative; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));">
+                                   <div style="background-color: ${c.stage === 'New' ? '#3b82f6' : '#10b981'}; color: white; width: 32px; height: 32px; border-radius: 10px; border: 2px solid #0f172a; display: flex; align-items: center; justify-content: center;">
+                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                                   </div>
+                                   <div style="width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 6px solid ${c.stage === 'New' ? '#3b82f6' : '#10b981'}; margin-top: -2px; filter: drop-shadow(0 -1px 0 #0f172a);"></div>
+                                 </div>`,
+                          iconSize: [32, 40],
+                          iconAnchor: [16, 38],
+                          popupAnchor: [0, -32]
+                        })}
+                      >
+                        <Popup className="custom-popup">
+                          <div className="p-5 min-w-[280px]">
+                            <div className="flex justify-between items-start mb-4">
+                              <div className="flex flex-col">
+                                <span className="text-[10px] font-black text-blue-700 uppercase tracking-widest">{c.id}</span>
+                                <span className="text-[9px] text-slate-400 font-bold">{format(c.timestamp, 'HH:mm')}</span>
+                              </div>
+                              <span className={cn(
+                                "px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-widest",
+                                c.stage === 'New' ? "bg-blue-900/40 text-blue-400" : 
+                                c.stage === 'Under Review' ? "bg-amber-900/40 text-amber-400" :
+                                c.stage === 'Agent Assignment' ? "bg-cyan-900/40 text-cyan-400" :
+                                c.stage === 'Ready For Legal' ? "bg-emerald-900/40 text-emerald-400" :
+                                c.stage === 'Recovery In Progress' ? "bg-purple-900/40 text-purple-400" :
+                                "bg-slate-900/40 text-slate-400"
+                              )}>{c.stage}</span>
+                            </div>
+                            <h4 className="font-black text-white text-base mb-1 tracking-tight">{c.location.name}</h4>
+                            <p className="text-xs text-slate-400 font-bold mb-5 flex items-center gap-1">
+                              <MapPin className="w-3 h-3" />
+                              {c.location.city}
+                            </p>
+                            
+                            <div className="grid grid-cols-2 gap-6 py-4 border-y border-slate-800">
+                              <div>
+                                <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest mb-1">Potential</p>
+                                <p className="text-sm font-black text-white">₹{c.recoverableValue.toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-[9px] text-slate-500 uppercase font-black tracking-widest mb-1">Quality</p>
+                                <p className="text-sm font-black text-white">{c.qualityScore}%</p>
+                              </div>
+                            </div>
+                            
+                            <button 
+                              onClick={() => {
+                                handleSelectCase(c.id);
+                                setActiveTab('cases');
+                              }}
+                              className="w-full mt-5 py-3 bg-blue-700 text-white text-[11px] font-black uppercase tracking-widest rounded-lg hover:bg-blue-800 transition-all shadow-lg shadow-blue-700/20"
+                            >
+                              Access Evidence Vault
+                            </button>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    </React.Fragment>
+                  ))}
+                </MapContainer>
+                
+                <MapStatsOverlay cases={allCases} />
+              </div>
+            ) : activeTab === 'progress' ? (
+              <KanbanBoard 
+                cases={allCases} 
+                onSelectCase={(id) => {
+                  handleSelectCase(id);
+                  setActiveTab('cases');
+                }}
+                onDragEnd={onDragEnd}
+                invalidMoveId={invalidMoveId}
+              />
+            ) : activeTab === 'agent' ? (
+              <AgentDashboard 
+                cases={allCases.filter(c => c.stage === 'Agent Assignment')} 
+                onSelectCase={handleSelectCase}
+                onUpdateStage={updateCaseStage}
+                setActiveTab={setActiveTab}
+                addComment={addComment}
+                onCreateVault={createEvidenceVault}
+                routeCaseIds={routeCaseIds}
+                setRouteCaseIds={setRouteCaseIds}
+                removeFromRoute={(cId) => {
+                  setRouteCaseIds(routeCaseIds.filter(id => id !== cId));
+                }}
+              />
+            ) : activeTab === 'reports' ? (
+              <ReportsDashboard allCases={allCases} />
+            ) : activeTab === 'litigation' ? (
+              <LitigationDashboard 
+                allCases={allCases} 
+                onSelectCase={handleSelectCase}
+                onUpdateStage={updateCaseStage}
+                setActiveTab={setActiveTab}
+                onAddComment={addComment}
+                addNotification={addNotification}
+                userRole={userRole}
+                clearNotification={clearNotification}
+                onDeleteVault={(cId, vId) => setVaultToDelete({ caseId: cId, vaultId: vId })}
+                onRequestMoreProof={(cId, vId) => requestMoreProof(cId, vId)}
+              />
+            ) : null}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       <AnimatePresence>
@@ -966,107 +1072,424 @@ export default function App() {
   );
 }
 
+function NavItem({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-label relative z-10",
+        active ? "text-text-primary" : "text-text-tertiary hover:text-text-secondary"
+      )}
+    >
+      {active && (
+        <motion.div 
+          layoutId="sidebar-active-pill"
+          className="absolute inset-0 bg-white/5 rounded-md -z-10 shadow-sm border-l-2 border-blue-500"
+          transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
+        />
+      )}
+      {icon}
+      <span className="hidden md:block transition-opacity duration-200">{label}</span>
+      {active && (
+        <motion.div 
+          layoutId="active-dot" 
+          className="absolute right-3 w-1.5 h-1.5 rounded-full bg-blue-500 hidden md:block" 
+        />
+      )}
+    </button>
+  );
+}
+
 function ReportsDashboard({ allCases }: { allCases: Case[] }) {
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: { staggerChildren: 0.05 }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 10 },
+    show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.23, 1, 0.32, 1] } }
+  };
+
   const stats = useMemo(() => {
-    const totalValue = allCases.reduce((sum, c) => sum + c.recoverableValue, 0);
-    const recoveredValue = allCases.filter(c => c.stage === 'Closed').reduce((sum, c) => sum + c.recoverableValue, 0);
-    const pendingValue = totalValue - recoveredValue;
-    const successRate = (allCases.filter(c => c.stage === 'Closed').length / allCases.length) * 100;
+    const totalValue = allCases.reduce((sum, c) => sum + (c.recoverableValue || 0), 0);
+    const recoveredValue = allCases.filter(c => c.stage === 'Closed').reduce((sum, c) => sum + (c.recoverableValue || 0), 0);
+    const totalExpectedFines = allCases.reduce((sum, c) => sum + (c.expectedFine || 0), 0);
+    const avgQuality = allCases.reduce((sum, c) => sum + (c.qualityScore || 0), 0) / allCases.length;
     
-    const labelDistribution = allCases.reduce((acc, c) => {
+    // Monthly Distribution
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthlyAcc = allCases.reduce((acc, c) => {
+      const monthIdx = new Date(c.timestamp).getMonth();
+      const month = months[monthIdx];
+      if (!acc[month]) acc[month] = { month, cases: 0, revenue: 0 };
+      acc[month].cases += 1;
+      acc[month].revenue += c.recoverableValue || 0;
+      return acc;
+    }, {} as Record<string, { month: string, cases: number, revenue: number }>);
+
+    const trendData = Object.values(monthlyAcc).sort((a,b) => months.indexOf(a.month) - months.indexOf(b.month));
+
+    // Label Distribution
+    const labelAcc = allCases.reduce((acc, c) => {
       acc[c.musicLabel] = (acc[c.musicLabel] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
+    const labelData = Object.entries(labelAcc).map(([name, value]) => ({ name, value }));
 
-    const cityDistribution = allCases.reduce((acc, c) => {
+    // City Performance
+    const cityAcc = allCases.reduce((acc, c) => {
       acc[c.location.city] = (acc[c.location.city] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
+    const cityChartData = Object.entries(cityAcc)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a,b) => b.value - a.value);
 
-    return { totalValue, recoveredValue, pendingValue, successRate, labelDistribution, cityDistribution };
+    // Agent Rankings
+    const agentAcc = allCases.reduce((acc, c) => {
+      if (!c.assignedTo) return acc;
+      if (!acc[c.assignedTo]) acc[c.assignedTo] = { name: c.assignedTo, cases: 0, completed: 0, revenue: 0 };
+      acc[c.assignedTo].cases += 1;
+      if (c.stage === 'Closed' || c.agentActionTaken) acc[c.assignedTo].completed += 1;
+      acc[c.assignedTo].revenue += c.recoverableValue || 0;
+      return acc;
+    }, {} as Record<string, { name: string, cases: number, completed: number, revenue: number }>);
+    const agentRankings = Object.values(agentAcc).sort((a,b) => b.completed - a.completed);
+
+    // Trust Gate Failures
+    const gateFailures = {
+      mediaHashKey: 0,
+      payloadSignature: 0,
+      clockSkewDetection: 0,
+      geofencingContinuity: 0,
+      deviceTrustBand: 0
+    };
+    allCases.forEach(c => {
+      Object.entries(c.trustGates).forEach(([gate, passed]) => {
+        if (!passed) gateFailures[gate as keyof typeof gateFailures] += 1;
+      });
+    });
+    const gateData = Object.entries(gateFailures).map(([name, value]) => ({ 
+      name: name.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()), 
+      value 
+    }));
+
+    return { 
+      totalValue, 
+      recoveredValue, 
+      totalExpectedFines, 
+      avgQuality, 
+      trendData, 
+      labelData, 
+      cityChartData, 
+      agentRankings,
+      gateData
+    };
   }, [allCases]);
 
+  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-950 p-8 lg:p-12">
-      <div className="max-w-7xl mx-auto space-y-12">
-        <header className="flex justify-between items-end">
+    <div className="flex-1 overflow-y-auto bg-slate-950 p-6 lg:p-10">
+      <motion.div 
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="max-w-[1600px] mx-auto space-y-10"
+      >
+        {/* Header Section */}
+        <motion.header variants={itemVariants} className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
           <div>
-            <h2 className="text-[10px] font-black text-blue-500 uppercase tracking-[0.3em] mb-3">Management Intelligence</h2>
-            <h1 className="text-4xl font-black text-white tracking-tight">Executive Analytics</h1>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              <h2 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.4em]">Intelligence Matrix v4.2</h2>
+            </div>
+            <h1 className="text-4xl font-black text-white tracking-tighter flex items-center gap-4">
+              Operational Analytics
+              <span className="px-3 py-1 bg-white/5 border border-white/10 rounded-lg text-xs font-mono text-slate-400">
+                FY 2024-25
+              </span>
+            </h1>
           </div>
-          <div className="flex gap-4">
-            <button className="px-6 py-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-all">
-              Export CSV
+          <div className="flex gap-3">
+            <button className="flex items-center gap-2 px-6 py-3 bg-slate-900 border border-slate-800 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-all group">
+              <TrendingUp className="w-3.5 h-3.5 group-hover:text-blue-400" />
+              Historical Comparison
             </button>
-            <button className="px-6 py-3 bg-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20">
-              Generate PDF Report
+            <button className="flex items-center gap-2 px-6 py-3 bg-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20">
+              <ExternalLink className="w-3.5 h-3.5" />
+              Generate Dossier
             </button>
           </div>
-        </header>
+        </motion.header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <StatCard label="Total Pipeline Value" value={`₹${(stats.totalValue / 100000).toFixed(1)}L`} icon={<IndianRupee className="w-5 h-5 text-blue-400" />} />
-          <StatCard label="Recovered Revenue" value={`₹${(stats.recoveredValue / 100000).toFixed(1)}L`} icon={<ShieldCheck className="w-5 h-5 text-emerald-400" />} />
-          <StatCard label="Pending Recovery" value={`₹${(stats.pendingValue / 100000).toFixed(1)}L`} icon={<Clock className="w-5 h-5 text-amber-400" />} />
-          <StatCard label="Success Rate" value={`${stats.successRate.toFixed(1)}%`} icon={<Activity className="w-5 h-5 text-purple-400" />} />
-        </div>
+        {/* Global Key Metrics */}
+        <motion.div variants={itemVariants} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <StatCard 
+            label="Gross Recoverable" 
+            value={`₹${(stats.totalValue / 100000).toFixed(2)}L`} 
+            trend="+12.4%" 
+            icon={<IndianRupee className="w-5 h-5 text-blue-400" />} 
+            description="Total potential enforcement value"
+          />
+          <StatCard 
+            label="Realized Revenue" 
+            value={`₹${(stats.recoveredValue / 100000).toFixed(2)}L`} 
+            trend="+8.1%" 
+            icon={<ShieldCheck className="w-5 h-5 text-emerald-400" />} 
+            description="Settled and closed cases"
+          />
+          <StatCard 
+            label="Enforcement Quality" 
+            value={`${stats.avgQuality.toFixed(1)}/100`} 
+            trend="-2.4%" 
+            icon={<Activity className="w-5 h-5 text-purple-400" />} 
+            description="Mean forensic confidence score"
+          />
+          <StatCard 
+            label="Infraction Density" 
+            value={`${allCases.length}`} 
+            trend="+5%" 
+            icon={<AlertCircle className="w-5 h-5 text-red-400" />} 
+            description="Active files in investigation"
+          />
+        </motion.div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="bg-slate-900 rounded-[40px] p-10 border border-slate-800 shadow-sm">
-            <h3 className="text-[11px] font-black text-slate-500 uppercase tracking-[0.3em] mb-8">Label Distribution</h3>
-            <div className="space-y-6">
-              {Object.entries(stats.labelDistribution).map(([label, count]) => (
-                <div key={label} className="space-y-2">
-                  <div className="flex justify-between text-xs font-bold">
-                    <span className="text-slate-300">{label}</span>
-                    <span className="text-white">{count} Cases</span>
+        {/* Primary Data Visuals */}
+        <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Trend Chart */}
+          <div className="lg:col-span-2 bg-slate-900/50 rounded-[32px] p-8 border border-white/5 space-y-8">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-black text-white uppercase tracking-widest">Infraction Velocity</h3>
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">Monthly Case Load vs Revenue Projection</p>
+              </div>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-blue-500" />
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Revenue</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-slate-700" />
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cases</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="h-[350px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={stats.trendData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', fontSize: '10px' }}
+                    itemStyle={{ fontWeight: '900', textTransform: 'uppercase' }}
+                  />
+                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: '#64748b' }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: '#64748b' }} />
+                  <Area type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
+                  <Area type="monotone" dataKey="cases" stroke="#64748b" strokeWidth={2} fillOpacity={0.1} fill="#64748b" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Rights Holder Breakdown */}
+          <div className="bg-slate-900/50 rounded-[32px] p-8 border border-white/5 flex flex-col">
+            <div className="mb-8">
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">Rights Distribution</h3>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">Catalog exposure by Major Labels</p>
+            </div>
+            
+            <div className="flex-1 flex flex-col items-center justify-center">
+              <div className="h-[240px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={stats.labelData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {stats.labelData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="rgba(0,0,0,0.2)" />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-x-8 gap-y-3 w-full mt-6">
+                {stats.labelData.map((entry, index) => (
+                  <div key={entry.name} className="flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">{entry.name}</span>
                   </div>
-                  <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-blue-500" 
-                      style={{ width: `${(Number(count) / allCases.length) * 100}%` }}
-                    />
+                ))}
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Secondary Insights Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 pb-12">
+          
+          {/* Top Cities */}
+          <div className="bg-slate-900/50 rounded-[32px] p-8 border border-white/5 space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">Target Hubs</h3>
+              <MapIcon className="w-4 h-4 text-slate-600" />
+            </div>
+            <div className="space-y-4">
+              {stats.cityChartData.slice(0, 5).map((city, idx) => (
+                <div key={city.name} className="flex items-center gap-4">
+                  <span className="text-[10px] font-mono text-slate-700 w-4">0{idx + 1}</span>
+                  <div className="flex-1 space-y-1">
+                    <div className="flex justify-between items-end">
+                      <span className="text-[11px] font-black text-slate-300 uppercase tracking-widest">{city.name}</span>
+                      <span className="text-[9px] font-bold text-slate-500">{city.value} Cases</span>
+                    </div>
+                    <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-blue-500 rounded-full" 
+                        style={{ width: `${(city.value / allCases.length) * 100}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="bg-slate-900 rounded-[40px] p-10 border border-slate-800 shadow-sm">
-            <h3 className="text-[11px] font-black text-slate-500 uppercase tracking-[0.3em] mb-8">Geographic Density</h3>
-            <div className="space-y-6">
-              {Object.entries(stats.cityDistribution).map(([city, count]) => (
-                <div key={city} className="space-y-2">
-                  <div className="flex justify-between text-xs font-bold">
-                    <span className="text-slate-300">{city}</span>
-                    <span className="text-white">{count} Cases</span>
-                  </div>
-                  <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-emerald-500" 
-                      style={{ width: `${(Number(count) / allCases.length) * 100}%` }}
-                    />
+          {/* Agent Leaderboard */}
+          <div className="lg:col-span-2 bg-slate-900/50 rounded-[32px] p-8 border border-white/5 space-y-8">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-black text-white uppercase tracking-widest">Enforcement Champions</h3>
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">Performance metrics for Field Operations</p>
+              </div>
+              <button className="text-[9px] font-black text-brand-indigo uppercase tracking-widest hover:text-white transition-colors">View All Fleet</button>
+            </div>
+            
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-white/5">
+                    <th className="pb-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">Rank</th>
+                    <th className="pb-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">Agent Entity</th>
+                    <th className="pb-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">Operations</th>
+                    <th className="pb-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">Resolutions</th>
+                    <th className="pb-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em]">Yield</th>
+                    <th className="pb-4 text-[9px] font-black text-slate-600 uppercase tracking-[0.2em] text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {stats.agentRankings.slice(0, 4).map((agent, idx) => (
+                    <tr key={agent.name} className="group transition-colors hover:bg-white/[0.02]">
+                      <td className="py-4">
+                        <div className={cn(
+                          "w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold",
+                          idx === 0 ? "bg-amber-500/10 text-amber-500 border border-amber-500/20" : "text-slate-600"
+                        )}>
+                          {idx === 0 ? <Trophy className="w-3 h-3" /> : idx + 1}
+                        </div>
+                      </td>
+                      <td className="py-4">
+                        <p className="text-xs font-black text-slate-300 uppercase tracking-tight">{agent.name}</p>
+                        <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest mt-0.5">Fleet ID: AGENT-{(idx + 1) * 123}</p>
+                      </td>
+                      <td className="py-4">
+                        <span className="text-[10px] font-mono text-slate-400">{agent.cases} Files</span>
+                      </td>
+                      <td className="py-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-white">{agent.completed}</span>
+                          <div className="w-12 h-1 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-emerald-500" style={{ width: `${(agent.completed / agent.cases) * 100}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-4">
+                        <span className="text-[10px] font-mono text-emerald-400">₹{(agent.revenue / 1000).toFixed(1)}k</span>
+                      </td>
+                      <td className="py-4 text-right">
+                        <span className="px-2 py-1 bg-emerald-500/10 text-emerald-500 text-[8px] font-black uppercase rounded tracking-widest border border-emerald-500/20">
+                          Active
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Trust Matrix Breakdown */}
+          <div className="bg-slate-900/50 rounded-[32px] p-8 border border-white/5 space-y-6">
+            <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
+              <Shield className="w-4 h-4 text-blue-400" />
+              Forensic Integrity
+            </h3>
+            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-relaxed">
+              Detection of failed security gates across all field operations. Identifying systemic hardware or spoofing trends.
+            </p>
+            <div className="space-y-5">
+              {stats.gateData.map(gate => (
+                <div key={gate.name} className="flex items-center gap-4">
+                  <span className="flex-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">{gate.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-red-400">{gate.value}</span>
+                    <AlertCircle className={cn("w-3 h-3", gate.value > 0 ? "text-red-500" : "text-slate-700")} />
                   </div>
                 </div>
               ))}
             </div>
+            <div className="pt-4 border-t border-white/5">
+              <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2">
+                <Target className="w-3 h-3" />
+                System Reliability: 98.4%
+              </p>
+            </div>
           </div>
+
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
 
-function StatCard({ label, value, icon }: { label: string, value: string, icon: React.ReactNode }) {
+function StatCard({ label, value, trend, icon, description }: { label: string, value: string, trend: string, icon: React.ReactNode, description: string }) {
+  const isPositive = trend.startsWith('+');
   return (
-    <div className="bg-white/[0.02] rounded-xl p-8 border border-border-standard shadow-sm">
-      <div className="flex items-center gap-4 mb-4">
-        <div className="w-10 h-10 rounded-lg bg-white/[0.03] flex items-center justify-center border border-border-subtle">
+    <div className="bg-slate-900/50 rounded-3xl p-8 border border-white/5 space-y-4 group hover:border-white/10 transition-all">
+      <div className="flex items-center justify-between">
+        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center border border-white/10 group-hover:scale-110 transition-transform">
           {icon}
         </div>
-        <span className="text-tiny font-black text-text-tertiary uppercase tracking-widest">{label}</span>
+        <div className={cn(
+          "px-2 py-0.5 rounded-lg text-[10px] font-black border",
+          isPositive ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
+        )}>
+          {trend}
+        </div>
       </div>
-      <div className="text-h2 text-text-primary">{value}</div>
+      <div>
+        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{label}</p>
+        <div className="text-3xl font-black text-white tracking-tighter mt-1">{value}</div>
+        <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest mt-2">{description}</p>
+      </div>
     </div>
   );
 }
@@ -1225,17 +1648,41 @@ function CaseDetailView({
     // In a real app, this would use a library like jspdf or a server-side route
   };
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.08,
+        delayChildren: 0.1
+      }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 15 },
+    show: { 
+      opacity: 1, 
+      y: 0,
+      transition: { duration: 0.4, ease: [0.23, 1, 0.32, 1] }
+    }
+  };
+
   return (
     <>
       <motion.div 
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
         key={caseData.id}
         className="max-w-6xl mx-auto space-y-10"
       >
         {/* Latest Status Audit Insight - Minimal Version (for Agents) */}
         {userRole === 'Agent' && caseData.auditTrail.length > 0 && (
-          <div className="p-6 border border-border-standard bg-white/[0.01] rounded-[24px] relative overflow-hidden shadow-sm">
+          <motion.div 
+            variants={itemVariants}
+            className="p-6 border border-border-standard bg-white/[0.01] rounded-[24px] relative overflow-hidden shadow-sm"
+          >
             <div className="flex items-start justify-between gap-10">
               <div className="flex-1 space-y-4">
                 <div className="flex items-center gap-3">
@@ -1261,11 +1708,11 @@ function CaseDetailView({
                 </div>
               </div>
             </div>
-          </div>
+          </motion.div>
         )}
 
         {/* Header Section */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-10 pb-12 border-b border-border-subtle">
+        <motion.div variants={itemVariants} className="flex flex-col lg:flex-row lg:items-center justify-between gap-10 pb-12 border-b border-border-subtle">
           <div className="flex-1 space-y-5">
             <div className="flex items-center gap-3">
               <div className="px-3 py-1 bg-accent-violet/10 border border-accent-violet/20 rounded-full">
@@ -1353,7 +1800,7 @@ function CaseDetailView({
               )}
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* Agent Resolution Highlight (For Admin) */}
         {userRole === 'Admin' && caseData.agentActionTaken && (
@@ -1401,7 +1848,7 @@ function CaseDetailView({
         )}
 
         {/* Song Details Section */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <motion.div variants={itemVariants} className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="md:col-span-3 p-8 bg-white/[0.02] rounded-3xl border border-border-standard flex items-center gap-8">
             <div className="w-20 h-20 rounded-2xl bg-brand-indigo/10 flex items-center justify-center border border-brand-indigo/20 shrink-0">
               <Music className="w-10 h-10 text-brand-indigo" />
@@ -1441,10 +1888,10 @@ function CaseDetailView({
               ))}
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* Detail Tabs */}
-        <div className="flex border-b border-slate-800 gap-8 items-center">
+        <motion.div variants={itemVariants} className="flex border-b border-slate-800 gap-8 items-center">
           {caseData.evidenceVaults.map((vault, idx) => (
             <div key={vault.id} className="relative flex items-center group">
               <button 
@@ -1457,7 +1904,7 @@ function CaseDetailView({
                 {vault.name}
                 {activeDetailTab === `evidence-${idx}` && <motion.div layoutId="detailTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500" />}
               </button>
-              {userRole === 'Admin' && (
+              {userRole === 'Admin' && !isEvidenceLocked && (
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
@@ -1524,12 +1971,15 @@ function CaseDetailView({
               {activeDetailTab === 'comments' && <motion.div layoutId="detailTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500" />}
             </button>
           )}
-        </div>
+        </motion.div>
 
-        <div className={cn(
-          "grid gap-10",
-          userRole === 'Agent' ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
-        )}>
+        <motion.div 
+          variants={itemVariants}
+          className={cn(
+            "grid gap-10",
+            userRole === 'Agent' ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
+          )}
+        >
           <div className="space-y-10">
             {activeDetailTab.startsWith('evidence-') ? (
               <>
@@ -1809,10 +2259,13 @@ function CaseDetailView({
               </section>
             </div>
           )}
-        </div>
+        </motion.div>
 
         {/* Actions Section */}
-        <section className="flex flex-col md:flex-row items-center justify-between gap-8 pt-10 border-t border-slate-800">
+        <motion.section 
+          variants={itemVariants}
+          className="flex flex-col md:flex-row items-center justify-between gap-8 pt-10 border-t border-border-subtle"
+        >
           <div className="flex items-center gap-4">
             <div className={cn(
               "w-3 h-3 rounded-full shadow-sm",
@@ -1881,7 +2334,7 @@ function CaseDetailView({
               </button>
             )}
           </div>
-        </section>
+        </motion.section>
       </motion.div>
 
       <AnimatePresence>
@@ -2135,6 +2588,84 @@ function VerificationModal({
   );
 }
 
+function MapBoundsUpdater({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length > 0) {
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, { padding: [100, 100], animate: true });
+    }
+  }, [points, map]);
+  return null;
+}
+
+function MapStatsOverlay({ cases }: { cases: Case[] }) {
+  const cityStats = useMemo(() => {
+    const stats: Record<string, { count: number, revenue: number }> = {};
+    cases.forEach(c => {
+      if (!stats[c.location.city]) stats[c.location.city] = { count: 0, revenue: 0 };
+      stats[c.location.city].count++;
+      stats[c.location.city].revenue += c.recoverableValue;
+    });
+    return Object.entries(stats)
+      .sort((a, b) => b[1].revenue - a[1].revenue)
+      .slice(0, 4);
+  }, [cases]);
+
+  const stageStats = useMemo(() => {
+    const stats: Record<string, number> = {};
+    cases.forEach(c => {
+      stats[c.stage] = (stats[c.stage] || 0) + 1;
+    });
+    return stats;
+  }, [cases]);
+
+  return (
+    <div className="absolute bottom-10 right-10 z-[1000] w-72 space-y-4">
+      <motion.div 
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        className="bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-2xl p-6 shadow-2xl"
+      >
+        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">Regional Insights</h4>
+        <div className="space-y-4">
+          {cityStats.map(([city, data]) => (
+            <div key={city} className="space-y-1.5">
+              <div className="flex justify-between items-end">
+                <span className="text-xs font-black text-white">{city}</span>
+                <span className="text-[10px] font-bold text-slate-400">₹{(data.revenue/1000).toFixed(0)}k</span>
+              </div>
+              <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 rounded-full" 
+                  style={{ width: `${(data.count / cases.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
+      <motion.div 
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ delay: 0.1 }}
+        className="bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-2xl p-6 shadow-2xl"
+      >
+        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">Operational Pulse</h4>
+        <div className="grid grid-cols-2 gap-3">
+          {Object.entries(stageStats).slice(0, 4).map(([stage, count]) => (
+            <div key={stage} className="p-2.5 bg-slate-950 border border-white/5 rounded-xl">
+               <p className="text-[8px] font-black text-slate-600 uppercase tracking-widest truncate">{stage}</p>
+               <p className="text-base font-black text-white">{count}</p>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 function SummaryItem({ label, value, icon }: { label: string, value: string, icon: React.ReactNode }) {
   return (
     <div className="p-4 bg-slate-950/30 rounded-2xl border border-slate-800/30 flex items-center gap-4">
@@ -2322,6 +2853,63 @@ interface KanbanCardProps {
 }
 
 function KanbanCard({ caseData, onSelectCase, isInvalid }: KanbanCardProps) {
+  const getStageAction = (stage: CaseStage) => {
+    switch (stage) {
+      case 'New':
+        return { 
+          displayStage: 'New Case', 
+          role: 'Admin', 
+          action: 'Verify Proof',
+          color: 'text-blue-400',
+          bgColor: 'bg-blue-400/10'
+        };
+      case 'Under Review':
+        return { 
+          displayStage: 'In Review', 
+          role: 'Admin', 
+          action: 'Assign Agent',
+          color: 'text-amber-400',
+          bgColor: 'bg-amber-400/10'
+        };
+      case 'Agent Assignment':
+        return { 
+          displayStage: 'In Field', 
+          role: 'Agent', 
+          action: 'Collect Evidence',
+          color: 'text-cyan-400',
+          bgColor: 'bg-cyan-400/10'
+        };
+      case 'Ready For Legal':
+        return { 
+          displayStage: 'Legal Ready', 
+          role: 'Lawyer', 
+          action: 'Check File',
+          color: 'text-emerald-400',
+          bgColor: 'bg-emerald-400/10'
+        };
+      case 'Recovery In Progress':
+        return { 
+          displayStage: 'In Legal', 
+          role: 'Lawyer', 
+          action: 'Final Settlement',
+          color: 'text-purple-400',
+          bgColor: 'bg-purple-400/10'
+        };
+      case 'Closed':
+        return { 
+          displayStage: 'Closed', 
+          role: 'System', 
+          action: 'Archive File',
+          color: 'text-slate-400',
+          bgColor: 'bg-slate-400/10'
+        };
+      default:
+        return { displayStage: stage, role: 'Unknown', action: 'Pending', color: 'text-slate-500', bgColor: 'bg-slate-500/10' };
+    }
+  };
+
+  const actionInfo = getStageAction(caseData.stage);
+
   const {
     attributes,
     listeners,
@@ -2348,15 +2936,19 @@ function KanbanCard({ caseData, onSelectCase, isInvalid }: KanbanCardProps) {
     <motion.div
       ref={setNodeRef}
       style={style}
+      layout
       {...attributes}
       {...listeners}
       animate={isInvalid ? { 
         x: [-8, 8, -8, 8, 0],
         borderColor: ['#1e293b', '#ef4444', '#ef4444', '#ef4444', '#1e293b']
       } : {}}
-      transition={{ duration: 0.4 }}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
+      transition={{ 
+        layout: { type: 'spring', bounce: 0, duration: 0.3 },
+        default: { duration: 0.25, ease: [0.23, 1, 0.32, 1] }
+      }}
+      whileHover={{ scale: 1.01 }}
+      whileTap={{ scale: 0.99 }}
       onClick={() => onSelectCase(caseData.id)}
       className={cn(
         "w-full text-left bg-slate-900 border p-5 rounded-xl shadow-sm transition-all group cursor-grab active:cursor-grabbing",
@@ -2365,7 +2957,9 @@ function KanbanCard({ caseData, onSelectCase, isInvalid }: KanbanCardProps) {
     >
       <div className="flex justify-between items-start mb-3">
         <span className="text-[9px] font-black text-slate-500 group-hover:text-blue-400 transition-colors uppercase tracking-widest">{caseData.id}</span>
-        <ArrowRight className="w-3 h-3 text-slate-700 group-hover:text-blue-400 transition-colors" />
+        <div className={cn("px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest", actionInfo.bgColor, actionInfo.color)}>
+          {actionInfo.displayStage}
+        </div>
       </div>
       <h4 className="text-sm font-black text-white mb-2 tracking-tight line-clamp-1">{caseData.location.name}</h4>
       
@@ -2380,15 +2974,39 @@ function KanbanCard({ caseData, onSelectCase, isInvalid }: KanbanCardProps) {
         <MapPin className="w-3 h-3" />
         {caseData.location.city}
       </div>
+
+      <div className="mb-4 p-3 bg-white/[0.02] rounded-lg border border-white/5">
+        <p className="text-[8px] font-black text-slate-600 uppercase tracking-[0.2em] mb-1">Pending Action</p>
+        <div className="flex items-center gap-2">
+           <div className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center text-[8px] font-black text-slate-400">
+             {actionInfo.role[0]}
+           </div>
+           <p className="text-[10px] font-bold text-slate-300 leading-tight">
+             <span className="text-blue-400 font-black">{actionInfo.role}:</span> {actionInfo.action}
+           </p>
+        </div>
+      </div>
+
       <div className="flex items-center justify-between pt-4 border-t border-slate-800/50">
         <div className="flex items-center gap-1 text-white font-black text-[11px]">
           <IndianRupee className="w-3 h-3 text-slate-500" />
           {caseData.expectedFine.toLocaleString()}
         </div>
-        <div className="text-[10px] font-black text-blue-400">{caseData.qualityScore}%</div>
+        <div className="text-[10px] font-black text-blue-400">{caseData.qualityScore}% Match</div>
       </div>
     </motion.div>
   );
+}
+
+function MapAutoBounds({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length > 0) {
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+    }
+  }, [map, points]);
+  return null;
 }
 
 function AgentDashboard({ 
@@ -2415,6 +3033,14 @@ function AgentDashboard({
   const [resolvingCase, setResolvingCase] = useState<Case | null>(null);
   const [selectedAgentCaseId, setSelectedAgentCaseId] = useState<string | null>(cases.length > 0 ? cases[0].id : null);
   const [showPath, setShowPath] = useState(false);
+
+  // MISSION CONTROL SORTING: Latest first
+  const sortedCases = useMemo(() => {
+    return [...cases].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }, [cases]);
+
+  const latestCase = sortedCases[0];
+  const remainingCases = sortedCases.slice(1);
 
   const selectedCase = cases.find(c => c.id === selectedAgentCaseId) || cases[0];
   const routeCases = cases.filter(c => routeCaseIds.includes(c.id));
@@ -2469,14 +3095,53 @@ function AgentDashboard({
       </div>
       
       <div className="flex-1 flex overflow-hidden">
-        {/* Column 1: Case Sidebar */}
-        <div className="w-72 border-r border-border-subtle bg-white/[0.01] flex flex-col overflow-hidden">
-          <div className="p-6 border-b border-border-subtle flex items-center justify-between">
-            <h3 className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Assigned Cases</h3>
-            <Search className="w-3.5 h-3.5 text-text-quaternary" />
+        {/* Column 1: Case Sidebar - Mission Control Styling */}
+        <div className="w-80 border-r border-border-subtle bg-slate-900/50 flex flex-col overflow-hidden">
+          {/* Latest Assigned Case Header */}
+          <div className="p-8 border-b border-border-subtle bg-brand-indigo/5">
+             <div className="flex items-center gap-2 mb-4">
+               <div className="w-2 h-2 rounded-full bg-brand-indigo animate-pulse" />
+               <h3 className="text-[10px] font-black text-brand-indigo uppercase tracking-[0.2em]">Latest Assignment</h3>
+             </div>
+             
+             <button
+               onClick={() => {
+                 setSelectedAgentCaseId(latestCase.id);
+                 onSelectCase(latestCase.id);
+                 setActiveTab('cases');
+               }}
+               className={cn(
+                 "w-full text-left p-6 rounded-2xl border-2 transition-all group relative overflow-hidden shadow-2xl",
+                 selectedAgentCaseId === latestCase.id 
+                   ? "bg-slate-900 border-brand-indigo shadow-brand-indigo/10" 
+                   : "bg-slate-950 border-white/5 hover:border-brand-indigo/30"
+               )}
+             >
+                <div className="flex justify-between items-start mb-4">
+                  <span className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-widest">{latestCase.id}</span>
+                  <div className="px-2 py-0.5 bg-brand-indigo/10 rounded border border-brand-indigo/20 text-[9px] font-black text-brand-indigo uppercase">New</div>
+                </div>
+                <h4 className="text-xl font-black text-white mb-2 leading-tight tracking-tight">{latestCase.location.name}</h4>
+                <div className="flex items-center gap-2 text-[11px] text-slate-400 font-bold uppercase tracking-widest">
+                  <MapPin className="w-3.5 h-3.5" />
+                  {latestCase.location.city}
+                </div>
+                
+                <div className="mt-6 pt-6 border-t border-white/5 flex items-center justify-between">
+                   <div className="flex items-center gap-2">
+                     <Clock className="w-3.5 h-3.5 text-slate-600" />
+                     <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{format(latestCase.timestamp, 'HH:mm • MMM d')}</span>
+                   </div>
+                   <ArrowRight className="w-4 h-4 text-slate-700 group-hover:translate-x-1 transition-transform" />
+                </div>
+             </button>
           </div>
+
           <div className="flex-1 overflow-y-auto">
-            {cases.map(c => (
+            <div className="p-6 pb-2">
+               <h3 className="text-[9px] font-black text-slate-600 uppercase tracking-[0.2em] mb-4">Recent Queue</h3>
+            </div>
+            {remainingCases.map(c => (
               <button
                 key={c.id}
                 onClick={() => {
@@ -2485,21 +3150,23 @@ function AgentDashboard({
                   setActiveTab('cases');
                 }}
                 className={cn(
-                  "w-full p-6 border-b border-border-subtle text-left transition-all relative group",
-                  selectedAgentCaseId === c.id ? "bg-white/[0.04]" : "hover:bg-white/[0.02]"
+                  "w-full px-8 py-5 border-b border-white/[0.03] text-left transition-all relative group flex items-center justify-between",
+                  selectedAgentCaseId === c.id ? "bg-white/[0.03]" : "hover:bg-white/[0.01]"
                 )}
               >
-                {selectedAgentCaseId === c.id && <div className="absolute left-0 top-0 bottom-0 w-1 bg-brand-indigo" />}
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">{c.id}</span>
-                  <span className="text-[9px] text-text-quaternary font-bold">{format(c.timestamp, 'HH:mm')}</span>
+                {selectedAgentCaseId === c.id && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-brand-indigo" />}
+                <div className="flex-1 min-w-0 pr-4">
+                  <div className="flex items-center gap-2 mb-1.5 opacity-50">
+                    <span className="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-widest">{c.id}</span>
+                    <span className="text-[8px] text-slate-600 font-bold">• {format(c.timestamp, 'HH:mm')}</span>
+                  </div>
+                  <h4 className="text-sm font-black text-slate-300 mb-1 truncate group-hover:text-white transition-colors">{c.location.name}</h4>
+                  <div className="flex items-center gap-2 text-[9px] text-slate-500 font-bold uppercase tracking-widest">
+                    <span>{c.location.city}</span>
+                    <span className="text-emerald-500/60 font-black">₹{(c.recoverableValue / 1000).toFixed(0)}k</span>
+                  </div>
                 </div>
-                <h4 className="text-sm font-black text-text-primary mb-1 truncate">{c.location.name}</h4>
-                <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-bold text-text-tertiary uppercase tracking-widest">{c.location.city}</span>
-                  <span className="text-[9px] text-text-quaternary">•</span>
-                  <span className="text-[9px] font-bold text-emerald-400">₹{(c.recoverableValue / 1000).toFixed(0)}k</span>
-                </div>
+                <ArrowRight className="w-3 h-3 text-slate-800 group-hover:text-slate-500 transition-colors shrink-0" />
               </button>
             ))}
           </div>
@@ -2544,6 +3211,7 @@ function AgentDashboard({
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                   url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 />
+                <MapAutoBounds points={routeCases.map(c => [c.location.lat, c.location.lng])} />
                 {showPath && routeCases.length > 1 && (
                   <Polyline 
                     positions={routeCases.map(c => [c.location.lat, c.location.lng] as [number, number])} 
@@ -2553,37 +3221,66 @@ function AgentDashboard({
                     dashArray="10, 10"
                   />
                 )}
-                {routeCases.map((c, idx) => (
-                  <Marker key={c.id} position={[c.location.lat, c.location.lng]}>
-                    <Popup className="custom-popup">
-                      <div className="p-4 min-w-[200px] bg-slate-900 text-white rounded-xl border border-white/10 shadow-2xl">
-                        <div className="flex items-center gap-2 mb-3">
-                           <span className="w-6 h-6 rounded-lg bg-brand-indigo text-white text-[10px] font-black flex items-center justify-center shadow-lg">{idx + 1}</span>
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{c.id}</span>
+                {routeCases.map((c, idx) => {
+                  const markerIcon = L.divIcon({
+                    className: 'custom-marker-icon',
+                    html: `<div class="marker-pin-wrapper" style="position: relative; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));">
+                             <div style="background-color: #6366f1; color: white; width: 36px; height: 36px; border-radius: 12px; border: 2px solid #0f172a; display: flex; flex-direction: column; align-items: center; justify-content: center; transform: translateY(0); transition: transform 0.2s ease;">
+                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1px;"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                               <span style="font-size: 9px; font-weight: 900; line-height: 1; letter-spacing: -0.02em;">${idx + 1}</span>
+                             </div>
+                             <div style="width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 7px solid #6366f1; margin-top: -2px; filter: drop-shadow(0 -1px 0 #0f172a);"></div>
+                           </div>`,
+                    iconSize: [40, 48],
+                    iconAnchor: [20, 44],
+                    popupAnchor: [0, -40]
+                  });
+
+                  return (
+                    <Marker 
+                      key={c.id} 
+                      position={[c.location.lat, c.location.lng]}
+                      icon={markerIcon}
+                    >
+                      <LeafletTooltip direction="top" offset={[0, -35]} opacity={1}>
+                        <div className="px-3 py-1.5 bg-slate-900 text-white rounded-lg border border-white/20 shadow-2xl">
+                          <p className="text-[10px] font-black uppercase tracking-widest">{c.location.name}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[9px] font-bold text-slate-400">Value:</span>
+                            <span className="text-[9px] font-black text-emerald-400">₹{(c.recoverableValue / 1000).toFixed(0)}k</span>
+                          </div>
                         </div>
-                        <h4 className="font-black text-white text-base mb-1 tracking-tight">{c.location.name}</h4>
-                        <p className="text-[10px] text-slate-400 font-bold mb-4 uppercase tracking-widest">{c.location.address}</p>
-                        <div className="flex flex-col gap-2">
-                          <button 
-                            onClick={() => {
-                              onSelectCase(c.id);
-                              setActiveTab('cases');
-                            }}
-                            className="w-full py-2.5 bg-brand-indigo text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-brand-indigo/20 hover:bg-brand-indigo/90 transition-all border border-brand-indigo/50 mb-1"
-                          >
-                            Open Case Details
-                          </button>
-                          <button 
-                            onClick={() => removeFromRoute(c.id)}
-                            className="w-full py-2 bg-slate-800 text-slate-400 text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-slate-700 hover:text-white transition-all border border-white/5"
-                          >
-                            Remove Pin
-                          </button>
+                      </LeafletTooltip>
+                      <Popup className="custom-popup">
+                        <div className="p-4 min-w-[200px] bg-slate-900 text-white rounded-xl border border-white/10 shadow-2xl">
+                          <div className="flex items-center gap-2 mb-3">
+                             <span className="w-6 h-6 rounded-lg bg-brand-indigo text-white text-[10px] font-black flex items-center justify-center shadow-lg">{idx + 1}</span>
+                             <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{c.id}</span>
+                          </div>
+                          <h4 className="font-black text-white text-base mb-1 tracking-tight">{c.location.name}</h4>
+                          <p className="text-[10px] text-slate-400 font-bold mb-4 uppercase tracking-widest">{c.location.address}</p>
+                          <div className="flex flex-col gap-2">
+                            <button 
+                              onClick={() => {
+                                onSelectCase(c.id);
+                                setActiveTab('cases');
+                              }}
+                              className="w-full py-2.5 bg-brand-indigo text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-brand-indigo/20 hover:bg-brand-indigo/90 transition-all border border-brand-indigo/50 mb-1"
+                            >
+                              Open Case Details
+                            </button>
+                            <button 
+                              onClick={() => removeFromRoute(c.id)}
+                              className="w-full py-2 bg-slate-800 text-slate-400 text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-slate-700 hover:text-white transition-all border border-white/5"
+                            >
+                              Remove Pin
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                ))}
+                      </Popup>
+                    </Marker>
+                  );
+                })}
               </MapContainer>
 
               {/* Route Overlay List */}
@@ -2594,10 +3291,10 @@ function AgentDashboard({
                  </div>
                  <div className="space-y-6">
                     {routeCases.map((c, idx) => (
-                      <button 
+                      <div 
                         key={c.id}
+                        className="flex gap-5 group w-full text-left cursor-pointer"
                         onClick={() => onSelectCase(c.id)}
-                        className="flex gap-5 group w-full text-left"
                       >
                          <div className="flex flex-col items-center gap-1 shrink-0">
                             <div className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 text-white text-[10px] font-black flex items-center justify-center transition-all group-hover:border-brand-indigo/50 group-hover:bg-brand-indigo/10">
@@ -2605,7 +3302,7 @@ function AgentDashboard({
                             </div>
                             {idx < routeCases.length - 1 && <div className="w-0.5 flex-1 bg-white/10" />}
                          </div>
-                         <div className="flex-1 pb-2">
+                         <div className="flex-1 pb-2 min-w-0">
                             <p className="text-xs font-black text-white group-hover:text-brand-indigo transition-colors mb-1 truncate">{c.location.name}</p>
                             <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">{c.location.city}</p>
                          </div>
@@ -2614,11 +3311,11 @@ function AgentDashboard({
                               e.stopPropagation();
                               removeFromRoute(c.id);
                             }}
-                            className="p-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-400/10 rounded-lg"
+                            className="p-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-400/10 rounded-lg shrink-0"
                          >
                             <X className="w-3.5 h-3.5" />
                          </button>
-                      </button>
+                      </div>
                     ))}
                     {routeCases.length === 0 && (
                       <div className="py-10 text-center space-y-3">
@@ -2631,8 +3328,6 @@ function AgentDashboard({
                  </div>
               </div>
            </div>
-        </div>
-      </div>
 
       <AnimatePresence>
         {resolvingCase && (
@@ -2646,7 +3341,9 @@ function AgentDashboard({
           />
         )}
       </AnimatePresence>
-    </div>
+            </div>
+         </div>
+      </div>
   );
 }
 
@@ -2712,6 +3409,7 @@ function LitigationDashboard({
   setActiveTab, 
   onAddComment, 
   addNotification, 
+  clearNotification,
   userRole, 
   onDeleteVault, 
   onRequestMoreProof 
@@ -2722,6 +3420,7 @@ function LitigationDashboard({
   setActiveTab: (tab: string) => void, 
   onAddComment: (id: string, text: string) => void, 
   addNotification: (msg: string, type?: 'major' | 'info') => void,
+  clearNotification: (id: string, type: 'comments' | 'major') => void,
   userRole: UserRole,
   onDeleteVault: (caseId: string, vaultId: string) => void,
   onRequestMoreProof: (caseId: string, vaultId: string) => void
@@ -2733,6 +3432,21 @@ function LitigationDashboard({
   const [isFormulating, setIsFormulating] = useState(false);
   const [detailTab, setDetailTab] = useState<'evidence' | 'threads' | 'formulation' | 'audit'>('evidence');
   const [newComment, setNewComment] = useState('');
+
+  // Auto-clear notifications when viewing relevant tabs
+  useEffect(() => {
+    if (selectedLocalCaseId) {
+      if (detailTab === 'audit') clearNotification(selectedLocalCaseId, 'major');
+      if (detailTab === 'threads') clearNotification(selectedLocalCaseId, 'comments');
+    }
+  }, [detailTab, selectedLocalCaseId, clearNotification]);
+
+  // Clear all when selecting a new case
+  const handleSelectLocalCase = (id: string) => {
+    setSelectedLocalCaseId(id);
+    clearNotification(id, 'major');
+    clearNotification(id, 'comments');
+  };
 
   const dossiers = useMemo(() => {
     const groups: Record<string, Case[]> = {};
@@ -2879,7 +3593,7 @@ function LitigationDashboard({
               {currentDossier.activeCases.map((c: Case) => (
                 <button 
                   key={c.id}
-                  onClick={() => setSelectedLocalCaseId(c.id)}
+                  onClick={() => handleSelectLocalCase(c.id)}
                   className={cn(
                     "w-full p-3 rounded-lg border transition-all text-left group relative",
                     (selectedLocalCaseId === c.id || (!selectedLocalCaseId && currentDossier.activeCases[0].id === c.id))
@@ -2887,6 +3601,12 @@ function LitigationDashboard({
                       : "bg-transparent border-transparent hover:bg-white/[0.02] hover:border-border-standard"
                   )}
                 >
+                  {c.unreadMajorChanges && (
+                    <span className="w-2 h-2 bg-red-500 rounded-full absolute top-3 right-3 shadow-lg shadow-red-500/50 animate-pulse z-10" />
+                  )}
+                  {c.unreadComments && !c.unreadMajorChanges && (
+                    <span className="w-1.5 h-1.5 bg-brand-indigo rounded-full absolute top-3 right-3 shadow-lg z-10" />
+                  )}
                   <div className="flex justify-between items-start mb-1">
                     <span className="text-[10px] font-black text-red-400 uppercase tracking-widest">{c.id}</span>
                     <span className="text-[9px] text-text-quaternary font-bold">{format(c.timestamp, 'MMM d')}</span>
@@ -2929,26 +3649,24 @@ function LitigationDashboard({
       <div className="flex-1 overflow-y-auto bg-bg-panel p-12">
         {currentCase ? (
           <div className="max-w-4xl mx-auto space-y-12">
-            {/* Consolidated Case Dossier Header */}
-            <div className="p-10 bg-white/[0.02] rounded-[40px] border border-border-standard shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-brand-indigo/5 blur-[100px] -mr-32 -mt-32" />
-              
+            {/* Consolidated Case Dossier Header - Minimal Professional Styling */}
+            <div className="p-10 bg-slate-900 border border-slate-800 rounded-3xl relative overflow-hidden">
               <div className="relative z-10 space-y-10">
                 <div className="flex justify-between items-start">
                   <div className="space-y-4">
                     <div className="flex items-center gap-3">
-                      <span className="px-3 py-1 bg-brand-indigo/10 text-brand-indigo text-[10px] font-black tracking-widest uppercase rounded-full border border-brand-indigo/20">
+                      <span className="px-3 py-1 bg-slate-950 text-slate-400 text-[10px] font-mono font-bold tracking-widest uppercase rounded border border-white/5">
                         {currentCase.id}
                       </span>
-                      <span className="text-text-quaternary text-[11px] font-bold uppercase tracking-widest">
-                        Infraction Recorded {format(currentCase.timestamp, 'MMM d, yyyy • HH:mm')}
+                      <span className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">
+                        Recorded {format(currentCase.timestamp, 'MMM d, yyyy • HH:mm')}
                       </span>
                     </div>
-                    <h3 className="text-5xl font-black text-text-primary tracking-tighter leading-none">
+                    <h3 className="text-4xl font-black text-white tracking-tight leading-none">
                       {currentCase.songAssessment.title}
                     </h3>
                     <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-2 text-text-secondary">
+                      <div className="flex items-center gap-2 text-slate-400">
                         <Music className="w-5 h-5 text-brand-indigo" />
                         <span className="text-lg font-bold">{currentCase.songAssessment.artists.join(', ')}</span>
                       </div>
@@ -2968,58 +3686,63 @@ function LitigationDashboard({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-12 pt-10 border-t border-border-subtle">
+                <div className="grid grid-cols-3 gap-12 pt-10 border-t border-white/5">
                   <div className="space-y-6">
-                    <p className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Forensic Identifiers</p>
-                    <div className="space-y-4">
-                      <div>
-                        <p className="text-[9px] font-bold text-text-tertiary uppercase tracking-widest mb-1">ISRC Code</p>
-                        <p className="text-sm font-black text-text-primary font-mono">{currentCase.songAssessment.isrc}</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Forensic Identifiers</p>
+                    <div className="space-y-4 font-mono">
+                      <div className="p-3 bg-slate-950 rounded border border-white/5 hover:border-slate-800 transition-colors">
+                        <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest mb-1">ISRC_CODE</p>
+                        <p className="text-[12px] font-black text-slate-300 tracking-tight">{currentCase.songAssessment.isrc}</p>
                       </div>
-                      <div>
-                        <p className="text-[9px] font-bold text-text-tertiary uppercase tracking-widest mb-1">UPC / EAN</p>
-                        <p className="text-sm font-black text-text-primary font-mono">{currentCase.songAssessment.upc}</p>
+                      <div className="p-3 bg-slate-950 rounded border border-white/5 hover:border-slate-800 transition-colors">
+                        <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest mb-1">UPC_EAN</p>
+                        <p className="text-[12px] font-black text-slate-300 tracking-tight">{currentCase.songAssessment.upc}</p>
                       </div>
-                      <div>
-                        <p className="text-[9px] font-bold text-text-tertiary uppercase tracking-widest mb-1">Rights Association</p>
-                        <p className="text-sm font-black text-brand-indigo uppercase tracking-widest">{currentCase.songAssessment.rightsAssociation}</p>
+                      <div className="flex items-center justify-between px-1">
+                        <p className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">REG_ASSOC</p>
+                        <p className="text-[10px] font-black text-brand-indigo uppercase tracking-widest">{currentCase.songAssessment.rightsAssociation}</p>
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-6">
-                    <p className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Venue Intelligence</p>
-                    <div className="space-y-4">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Establishment Entity</p>
+                    <div className="space-y-5">
                       <div>
-                        <p className="text-[9px] font-bold text-text-tertiary uppercase tracking-widest mb-1">Establishment</p>
-                        <p className="text-sm font-black text-text-primary">{currentCase.location.name}</p>
+                        <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest mb-1">Legal Name</p>
+                        <p className="text-base font-black text-white leading-tight">{currentCase.location.name}</p>
                       </div>
-                      <div className="flex items-start gap-2">
-                        <MapPin className="w-4 h-4 text-text-quaternary shrink-0 mt-0.5" />
-                        <p className="text-xs font-bold text-text-secondary leading-relaxed">{currentCase.location.address}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Phone className="w-4 h-4 text-text-quaternary shrink-0" />
-                        <p className="text-xs font-bold text-text-secondary">{currentCase.location.phone}</p>
+                      <div className="space-y-3">
+                         <div className="flex items-start gap-2.5">
+                           <MapPin className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
+                           <p className="text-[11px] font-bold text-slate-400 leading-relaxed">{currentCase.location.address}</p>
+                         </div>
+                         <div className="flex items-center gap-2.5">
+                           <Phone className="w-4 h-4 text-slate-600 shrink-0" />
+                           <p className="text-[11px] font-bold text-slate-400 font-mono tracking-tighter">{currentCase.location.phone}</p>
+                         </div>
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-6">
-                    <p className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Case Status</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Litigation Status</p>
                     <div className="space-y-4">
-                      <div className="p-4 bg-white/[0.02] rounded-2xl border border-border-standard">
-                        <div className="flex items-center gap-3 mb-3">
-                          <div className={cn("w-2.5 h-2.5 rounded-full", currentCase.stage === 'Closed' ? "bg-emerald-500" : "bg-red-500")} />
-                          <span className="text-xs font-black text-text-primary uppercase tracking-widest">{currentCase.stage}</span>
+                      <div className="p-5 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl">
+                        <div className="flex items-center justify-between mb-4 pb-4 border-b border-white/5">
+                          <div className="flex items-center gap-2.5">
+                             <div className={cn("w-2 h-2 rounded-full", currentCase.stage === 'Closed' ? "bg-emerald-500" : "bg-red-500")} />
+                             <span className="text-[11px] font-black text-white uppercase tracking-widest">{currentCase.stage}</span>
+                          </div>
+                          <span className="text-[10px] font-mono font-bold text-slate-700">Ver 1.0.4</span>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-brand-indigo flex items-center justify-center text-[10px] font-black text-white">
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 rounded bg-slate-950 flex items-center justify-center border border-white/5 text-[12px] font-black text-slate-400">
                             {currentCase.assignedTo?.split(' ')[1][0] || 'L'}
                           </div>
                           <div>
-                            <p className="text-[8px] font-black text-text-quaternary uppercase tracking-widest">Lead Counsel</p>
-                            <p className="text-[11px] font-bold text-text-secondary">{currentCase.assignedTo || 'Unassigned'}</p>
+                            <p className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Assigned Counsel</p>
+                            <p className="text-[13px] font-black text-slate-300">{currentCase.assignedTo || 'Unassigned'}</p>
                           </div>
                         </div>
                       </div>
@@ -3028,9 +3751,9 @@ function LitigationDashboard({
                           onSelectCase(currentCase.id);
                           setActiveTab('cases');
                         }}
-                        className="w-full py-3 bg-white/[0.04] hover:bg-white/[0.08] text-text-primary text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border border-border-standard"
+                        className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border border-slate-800"
                       >
-                        View Full Evidence Vault
+                        View Full Dossier
                       </button>
                     </div>
                   </div>
@@ -3083,73 +3806,68 @@ function LitigationDashboard({
             </div>
 
             {detailTab === 'evidence' ? (
-              <div className="space-y-10">
-                {/* Master Evidence & Intelligence Consolidated */}
-                <div className="space-y-8">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-[11px] font-black text-text-quaternary uppercase tracking-[0.2em]">Master Forensic Package</h4>
-                    <div className="flex gap-2">
-                      <span className="px-3 py-1 bg-brand-indigo/10 border border-brand-indigo/20 rounded-full text-[9px] font-black text-brand-indigo uppercase tracking-widest">
-                        Master Intelligence Active
-                      </span>
+              <div className="space-y-12">
+                {/* 01: Forensic Intelligence Sheet */}
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between border-l-4 border-slate-700 pl-6">
+                    <div>
+                      <h4 className="text-[12px] font-black text-white uppercase tracking-[0.3em] mb-1">Primary Infraction intelligence</h4>
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Forensic Video Analysis & Neural Verdict</p>
+                    </div>
+                    <div className="text-right">
+                       <span className="text-[10px] font-mono font-bold text-slate-600 block mb-1">RECORD_ID: {currentCase.id}</span>
+                       <span className="px-3 py-1 bg-white/5 border border-white/10 rounded-full text-[9px] font-black text-slate-400 uppercase tracking-widest">Class A Evidence</span>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-5 gap-10 bg-white/[0.02] rounded-[40px] border border-border-standard overflow-hidden shadow-2xl group">
-                    {/* Video Side */}
-                    <div className="lg:col-span-3 aspect-video bg-black relative overflow-hidden group-hover:shadow-[0_0_50px_rgba(99,102,241,0.1)] transition-all">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-1 bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
+                    {/* Visual Proof */}
+                    <div className="lg:col-span-8 bg-black relative">
                       <video 
                         src={currentCase.videoProofUrl} 
-                        className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity"
+                        className="w-full h-full object-cover"
                         controls
                       />
-                      <div className="absolute top-8 left-8 px-5 py-2.5 bg-black/60 backdrop-blur-xl rounded-full border border-white/10 flex items-center gap-3">
-                        <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]" />
-                        <span className="text-[10px] font-black text-white uppercase tracking-widest">Forensic Stream</span>
+                      <div className="absolute top-6 left-6 flex items-center gap-3">
+                         <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md rounded border border-white/10 flex items-center gap-2">
+                           <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                           <span className="text-[9px] font-black text-white uppercase tracking-widest">LIVE_FORENSIC_STREAM</span>
+                         </div>
                       </div>
                     </div>
 
-                    {/* AI Info Side */}
-                    <div className="lg:col-span-2 p-10 flex flex-col justify-between relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-brand-indigo/5 blur-[50px] -mr-16 -mt-16" />
-                      
-                      <div className="space-y-8 relative z-10">
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-xl bg-brand-indigo/10 flex items-center justify-center border border-brand-indigo/20">
-                            <Activity className="w-5 h-5 text-brand-indigo" />
-                          </div>
-                          <div>
-                            <p className="text-[9px] font-black text-text-quaternary uppercase tracking-widest mb-0.5">Automated Intelligence</p>
-                            <h4 className="text-lg font-black text-text-primary tracking-tight">Forensic Verdict</h4>
+                    {/* AI Forensic Analysis */}
+                    <div className="lg:col-span-4 p-10 bg-slate-900 flex flex-col justify-between border-l border-slate-800">
+                      <div className="space-y-8">
+                        <div>
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4">Neural Assessment</p>
+                          <div className="p-6 bg-slate-950 rounded-2xl border border-white/[0.03]">
+                            <p className="text-[13px] text-slate-300 font-medium italic leading-relaxed">
+                              "{currentCase.aiExplanation}"
+                            </p>
                           </div>
                         </div>
 
-                        <div className="space-y-6">
-                          <p className="text-base text-text-secondary leading-relaxed font-medium italic border-l-2 border-brand-indigo/30 pl-6 py-1">
-                            "{currentCase.aiExplanation}"
-                          </p>
-                          
-                          <div className="space-y-4 pt-4">
-                            <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-text-quaternary">
-                              <span>Confidence Index</span>
-                              <span className="text-brand-indigo">{currentCase.qualityScore}%</span>
-                            </div>
-                            <div className="h-1.5 bg-white/[0.05] rounded-full overflow-hidden border border-white/5">
+                        <div className="space-y-4">
+                           <div className="flex justify-between items-end">
+                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Match Certainty</p>
+                              <p className="text-2xl font-black text-white tracking-tighter">{currentCase.qualityScore}%</p>
+                           </div>
+                           <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
                               <motion.div 
                                 initial={{ width: 0 }}
                                 animate={{ width: `${currentCase.qualityScore}%` }}
-                                className="h-full bg-gradient-to-r from-brand-indigo to-cyan-400 shadow-[0_0_10px_rgba(99,102,241,0.3)]"
+                                className="h-full bg-brand-indigo"
                               />
-                            </div>
-                          </div>
+                           </div>
                         </div>
                       </div>
 
-                      <div className="pt-8 grid grid-cols-2 gap-4 relative z-10">
+                      <div className="pt-8 grid grid-cols-2 gap-x-6 gap-y-4">
                         {Object.entries(currentCase.trustGates).slice(0, 4).map(([key, value]) => (
-                          <div key={key} className="flex items-center gap-2 px-3 py-2 bg-white/[0.02] border border-border-standard rounded-lg">
-                            <div className={cn("w-1.5 h-1.5 rounded-full", value ? "bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]" : "bg-white/10")} />
-                            <span className="text-[8px] font-black text-text-tertiary uppercase tracking-widest">{key.replace(/([A-Z])/g, ' $1')}</span>
+                          <div key={key} className="flex items-center gap-2 border-b border-white/[0.03] pb-2">
+                            <div className={cn("w-1.5 h-1.5 rounded-full", value ? "bg-emerald-500" : "bg-slate-800")} />
+                            <span className="text-[8px] font-black text-slate-400 uppercase tracking-tighter truncate">{key.replace(/([A-Z])/g, ' $1')}</span>
                           </div>
                         ))}
                       </div>
@@ -3157,113 +3875,89 @@ function LitigationDashboard({
                   </div>
                 </div>
 
-                {/* Status Snapshot (Mini Audit Trail) */}
-                <div className="p-8 bg-white/[0.02] rounded-[40px] border border-border-standard">
-                  <div className="flex items-center justify-between mb-8">
-                    <p className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Latest Audit Snapshot</p>
-                    <button 
-                      onClick={() => setDetailTab('audit')}
-                      className="text-[9px] font-black text-brand-indigo uppercase tracking-widest hover:underline"
-                    >
-                      Full Audit Trail
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    {currentCase.auditTrail.slice(-3).reverse().map((entry, idx) => (
-                      <div key={idx} className="flex gap-4 group">
-                        <div className={cn(
-                          "w-1.5 h-1.5 rounded-full mt-1.5 shrink-0",
-                          idx === 0 ? "bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)]" : "bg-text-quaternary"
-                        )} />
-                        <div className="min-w-0">
-                          <p className="text-[10px] font-black text-text-primary uppercase tracking-widest truncate">{entry.action}</p>
-                          <p className="text-[9px] text-text-tertiary font-bold mb-1">{entry.actor}</p>
-                          <p className="text-[8px] text-text-quaternary font-bold">{format(new Date(entry.timestamp), 'HH:mm:ss')}</p>
-                        </div>
+                {/* 02: Verification Matrix & Packages */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+                   {/* Verification Gates */}
+                   <div className="lg:col-span-1 space-y-6">
+                      <h4 className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] border-b border-white/5 pb-4">Verification Matrix</h4>
+                      <div className="space-y-4">
+                         {Object.entries(currentCase.trustGates).map(([key, value]) => (
+                            <div key={key} className="flex items-center justify-between p-4 bg-slate-900/50 rounded-xl border border-white/5">
+                               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{key.replace(/([A-Z])/g, ' $1')}</span>
+                               <span className={cn(
+                                 "text-[8px] font-black uppercase px-2 py-0.5 rounded",
+                                 value ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+                               )}>
+                                 {value ? "Verified" : "Failed"}
+                               </span>
+                            </div>
+                         ))}
                       </div>
-                    ))}
-                  </div>
+                   </div>
+
+                   {/* Master Archive Snapshot */}
+                   <div className="lg:col-span-2 space-y-6">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                        <h4 className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em]">Package Intelligence</h4>
+                        <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">{currentCase.evidenceVaults.length} Vaults Available</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {currentCase.evidenceVaults.map(vault => {
+                          const isSelected = currentCase.selectedVaultIds?.includes(vault.id);
+                          return (
+                            <div 
+                              key={vault.id} 
+                              className={cn(
+                                "p-6 transition-all border rounded-2xl flex flex-col justify-between group h-40",
+                                isSelected 
+                                  ? "bg-slate-900 border-brand-indigo/30 shadow-2xl shadow-brand-indigo/5" 
+                                  : "bg-slate-950/30 border-white/[0.03] opacity-40 grayscale"
+                              )}
+                            >
+                              <div className="flex justify-between items-start">
+                                <div className="p-3 bg-white/5 rounded-xl border border-white/10">
+                                   <Video className="w-5 h-5 text-slate-400" />
+                                </div>
+                                <span className="text-[8px] font-mono text-slate-600">{vault.id}</span>
+                              </div>
+                              <div>
+                                <h5 className="text-[13px] font-black text-white mb-1">{vault.name}</h5>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Asset Locked</span>
+                                  <div className="w-1 h-1 rounded-full bg-slate-700" />
+                                  <span className="text-[9px] font-bold text-brand-indigo uppercase tracking-widest">Active</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                   </div>
                 </div>
 
-                {/* Additional Vaults Grid */}
-                <div className="space-y-8">
-                  <h4 className="text-[11px] font-black text-text-quaternary uppercase tracking-[0.2em]">Package Intelligence</h4>
-                  <div className="grid grid-cols-2 gap-8">
-                    {currentCase.evidenceVaults.map(vault => {
-                      const isSelected = currentCase.selectedVaultIds?.includes(vault.id);
-                      return (
-                        <div 
-                          key={vault.id} 
-                          className={cn(
-                            "p-8 transition-all border rounded-[40px] flex flex-col justify-between group",
-                            isSelected 
-                              ? "bg-white/[0.03] border-brand-indigo/30 shadow-lg shadow-brand-indigo/5" 
-                              : "bg-white/[0.01] border-border-standard/50 opacity-40 hover:opacity-100 grayscale hover:grayscale-0 scale-95 hover:scale-100"
-                          )}
-                        >
-                          <div className="space-y-6">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <Shield className={cn("w-5 h-5", isSelected ? "text-brand-indigo" : "text-text-quaternary")} />
-                                <h4 className="text-lg font-black text-text-primary tracking-tight">{vault.name}</h4>
-                                {isSelected && (
-                                  <span className="px-2 py-0.5 bg-brand-indigo/20 text-brand-indigo text-[8px] font-black uppercase rounded tracking-widest">Included</span>
-                                )}
-                                {userRole === 'Admin' && !isEvidenceLocked && (
-                                    <button 
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (currentCase) onDeleteVault(currentCase.id, vault.id);
-                                      }}
-                                      className="p-1 hover:bg-red-500/10 rounded transition-all text-text-quaternary hover:text-red-500"
-                                      title="Discard Evidence Vault"
-                                    >
-                                      <Plus className="w-3.5 h-3.5 rotate-45" />
-                                    </button>
-                                )}
-                              </div>
-                              <span className="text-[10px] font-bold text-text-quaternary uppercase tracking-widest">{format(vault.timestamp, 'MMM d, HH:mm')}</span>
+                {/* 03: Minimal Audit Trail Snapshot */}
+                <div className="p-10 bg-slate-900/50 rounded-3xl border border-white/[0.03] relative overflow-hidden">
+                   <div className="absolute top-0 right-0 p-8 opacity-[0.02]">
+                      <Activity className="w-32 h-32 text-white" />
+                   </div>
+                   <div className="relative z-10">
+                      <div className="flex items-center justify-between mb-10">
+                         <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em]">Critical Lifecycle Path</h4>
+                         <button onClick={() => setDetailTab('audit')} className="text-[9px] font-black text-brand-indigo uppercase tracking-widest hover:text-white transition-colors">Inspect Full Ledger</button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
+                        {currentCase.auditTrail.slice(-3).reverse().map((entry, idx) => (
+                          <div key={idx} className="relative group">
+                            <div className="flex items-center gap-3 mb-3">
+                               <div className={cn("w-1.5 h-1.5 rounded-full", idx === 0 ? "bg-brand-indigo" : "bg-slate-700")} />
+                               <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{format(new Date(entry.timestamp), 'MMM d, HH:mm')}</span>
                             </div>
-                            <div className="grid grid-cols-3 gap-4">
-                              {vault.images.map((img, i) => (
-                                <div key={i} className="aspect-square rounded-2xl bg-white/5 border border-white/5 overflow-hidden">
-                                  <img src={img} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                                </div>
-                              ))}
-                            </div>
-                            <p className="text-sm text-text-tertiary leading-relaxed italic">"{vault.notes}"</p>
+                            <p className="text-sm font-black text-slate-300 group-hover:text-white transition-colors mb-1">{entry.action}</p>
+                            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">{entry.actor}</p>
                           </div>
-                          {isSelected && (
-                            <div className="mt-6 pt-6 border-t border-brand-indigo/10 flex items-center justify-between">
-                               <div className="text-[9px] font-black text-brand-indigo uppercase tracking-widest">Legally Verified Package</div>
-                               <div className="flex items-center gap-4">
-                                  {userRole === 'Admin' && (
-                                    <button
-                                      disabled={vault.moreProofRequested || !!currentCase.evidenceVaults.find((v, idx) => {
-                                        const currentIndex = currentCase.evidenceVaults.indexOf(vault);
-                                        return idx < currentIndex && !v.moreProofRequested;
-                                      })}
-                                      onClick={() => currentCase && onRequestMoreProof(currentCase.id, vault.id)}
-                                      className={cn(
-                                        "px-3 py-1 text-[8px] font-black uppercase tracking-widest rounded transition-all",
-                                        vault.moreProofRequested 
-                                          ? "bg-amber-500/10 text-amber-500 border border-amber-500/20" 
-                                          : "bg-white/5 border border-border-standard text-text-quaternary hover:text-brand-indigo hover:border-brand-indigo/30"
-                                      )}
-                                    >
-                                      {vault.moreProofRequested ? "Proof Requested" : "Request More Proof"}
-                                    </button>
-                                  )}
-                                  <div className="flex gap-1">
-                                    {[1,2,3,4,5].map(i => <div key={i} className="w-1 h-1 rounded-full bg-brand-indigo" />)}
-                                  </div>
-                               </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                        ))}
+                      </div>
+                   </div>
                 </div>
               </div>
             ) : detailTab === 'threads' ? (
