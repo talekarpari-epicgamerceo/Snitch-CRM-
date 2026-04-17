@@ -36,6 +36,7 @@ export interface EvidenceVault {
   videoUrl?: string;
   images: string[];
   notes?: string;
+  moreProofRequested?: boolean;
 }
 
 export interface Case {
@@ -97,6 +98,8 @@ export interface Case {
   notes?: string;
   assignmentType?: 'Agent' | 'Lawyer';
   agentResolutionNote?: string;
+  agentActionTaken?: string;
+  hasBeenSentToAgent?: boolean;
   resolvedByAgentName?: string;
   
   // Audit & Communication

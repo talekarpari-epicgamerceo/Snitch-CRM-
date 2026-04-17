@@ -55,10 +55,11 @@ import {
   MessageSquare,
   Send,
   Link,
-  History
+  History,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet.heat';
 import { format } from 'date-fns';
@@ -117,6 +118,8 @@ export default function App() {
   // Advanced Intelligence State
   const [mapMode, setMapMode] = useState<'hotspots' | 'revenue'>('hotspots');
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [vaultToDelete, setVaultToDelete] = useState<{caseId: string, vaultId: string} | null>(null);
+  const [routeCaseIds, setRouteCaseIds] = useState<string[]>([]);
 
   const filteredCases = useMemo(() => {
     let base = allCases;
@@ -154,7 +157,7 @@ export default function App() {
     return null; // No fallback to allCases[0] if it's not in filtered list
   }, [selectedCaseId, filteredCases]);
 
-  const updateCaseStage = (id: string, newStage: CaseStage, notes?: string, assignmentType?: 'Agent' | 'Lawyer', agentResolutionNote?: string, resolvedByAgentName?: string, selectedVaultIds?: string[]) => {
+  const updateCaseStage = (id: string, newStage: CaseStage, notes?: string, assignmentType?: 'Agent' | 'Lawyer', agentResolutionNote?: string, resolvedByAgentName?: string, selectedVaultIds?: string[], agentActionTaken?: string) => {
     const agents = ['Agent Smith', 'Agent Johnson', 'Agent Williams', 'Agent Brown'];
     const lawyers = ['Lawyer Davis', 'Lawyer Miller', 'Lawyer Wilson', 'Lawyer Moore'];
     
@@ -183,6 +186,8 @@ export default function App() {
           assignedTo,
           assignmentType: assignmentType || c.assignmentType,
           agentResolutionNote: agentResolutionNote || c.agentResolutionNote,
+          agentActionTaken: agentActionTaken || c.agentActionTaken,
+          hasBeenSentToAgent: c.hasBeenSentToAgent || assignmentType === 'Agent',
           resolvedByAgentName: resolvedByAgentName || c.resolvedByAgentName,
           selectedVaultIds: selectedVaultIds || c.selectedVaultIds,
           auditTrail: [...c.auditTrail, auditEntry],
@@ -326,6 +331,48 @@ export default function App() {
           auditTrail: [...c.auditTrail, auditEntry],
           comments: [...c.comments, comment],
           unreadMajorChanges: true
+        };
+      }
+      return c;
+    }));
+  };
+
+  const deleteEvidenceVault = (caseId: string, vaultId: string) => {
+    setAllCases(prev => prev.map(c => {
+      if (c.id === caseId) {
+        return {
+          ...c,
+          evidenceVaults: (c.evidenceVaults || []).filter(v => v.id !== vaultId),
+          selectedVaultIds: c.selectedVaultIds?.filter(id => id !== vaultId),
+          auditTrail: [...c.auditTrail, {
+            id: `AUD-${Date.now()}`,
+            timestamp: new Date(),
+            action: "Evidence Vault Removed",
+            actor: userRole,
+            details: `Evidence vault ${vaultId} was deleted by Admin.`
+          }]
+        };
+      }
+      return c;
+    }));
+    setVaultToDelete(null);
+  };
+
+  const requestMoreProof = (caseId: string, vaultId: string) => {
+    setAllCases(prev => prev.map(c => {
+      if (c.id === caseId) {
+        return {
+          ...c,
+          evidenceVaults: c.evidenceVaults.map(v => 
+            v.id === vaultId ? { ...v, moreProofRequested: true } : v
+          ),
+          auditTrail: [...c.auditTrail, {
+            id: `AUD-${Date.now()}`,
+            timestamp: new Date(),
+            action: "More Proof Requested",
+            actor: userRole,
+            details: `Admin requested additional proof for ${vaultId}.`
+          }]
         };
       }
       return c;
@@ -669,8 +716,20 @@ export default function App() {
                   userRole={userRole}
                   clearNotification={clearNotification}
                   onCreateVault={createEvidenceVault}
+                  onDeleteVault={(vId) => setVaultToDelete({ caseId: selectedCase.id, vaultId: vId })}
+                  onRequestMoreProof={(vId) => requestMoreProof(selectedCase.id, vId)}
                   setActiveTab={setActiveTab}
                   setListTab={setListTab}
+                  onSelectCase={handleSelectCase}
+                  addToRoute={(cId) => {
+                    if (!routeCaseIds.includes(cId)) {
+                      setRouteCaseIds([...routeCaseIds, cId]);
+                    }
+                  }}
+                  removeFromRoute={(cId) => {
+                    setRouteCaseIds(routeCaseIds.filter(id => id !== cId));
+                  }}
+                  isInRoute={routeCaseIds.includes(selectedCase.id)}
                 />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-text-quaternary">
@@ -847,6 +906,11 @@ export default function App() {
             setActiveTab={setActiveTab}
             addComment={addComment}
             onCreateVault={createEvidenceVault}
+            routeCaseIds={routeCaseIds}
+            setRouteCaseIds={setRouteCaseIds}
+            removeFromRoute={(cId) => {
+              setRouteCaseIds(routeCaseIds.filter(id => id !== cId));
+            }}
           />
         ) : activeTab === 'reports' ? (
           <ReportsDashboard allCases={allCases} />
@@ -858,9 +922,46 @@ export default function App() {
             setActiveTab={setActiveTab}
             onAddComment={addComment}
             addNotification={addNotification}
+            userRole={userRole}
+            onDeleteVault={(cId, vId) => setVaultToDelete({ caseId: cId, vaultId: vId })}
+            onRequestMoreProof={(cId, vId) => requestMoreProof(cId, vId)}
           />
         ) : null}
       </main>
+
+      <AnimatePresence>
+        {vaultToDelete && (
+          <div className="fixed inset-0 z-[3000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-bg-panel border border-border-standard rounded-[32px] p-8 max-w-md w-full shadow-2xl"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-red-500/10 flex items-center justify-center mb-6">
+                <AlertCircle className="w-6 h-6 text-red-500" />
+              </div>
+              <h3 className="text-xl font-black text-text-primary tracking-tight mb-3">Delete Evidence Vault?</h3>
+              <p className="text-sm font-bold text-text-secondary leading-relaxed mb-8">
+                Are you sure you want to delete this evidence vault? This action is irreversible and the forensic data will be permanently removed.
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setVaultToDelete(null)}
+                  className="flex-1 py-3 bg-white/[0.04] hover:bg-white/[0.08] text-text-secondary text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border border-border-standard"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => deleteEvidenceVault(vaultToDelete.caseId, vaultToDelete.vaultId)}
+                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl transition-all shadow-lg shadow-red-600/20"
+                >
+                  Confirm Delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1059,23 +1160,36 @@ function CaseDetailView({
   userRole,
   clearNotification,
   onCreateVault,
+  onDeleteVault,
+  onRequestMoreProof,
   setActiveTab,
-  setListTab
+  setListTab,
+  onSelectCase,
+  addToRoute,
+  removeFromRoute,
+  isInRoute
 }: { 
   caseData: Case, 
-  onUpdateStage: (id: string, stage: CaseStage, notes?: string, type?: 'Agent' | 'Lawyer', resNote?: string, resAgentName?: string, selectedVaultIds?: string[]) => void,
+  onUpdateStage: (id: string, stage: CaseStage, notes?: string, type?: 'Agent' | 'Lawyer', resNote?: string, resAgentName?: string, selectedVaultIds?: string[], agentActionTaken?: string) => void,
   addComment: (id: string, text: string) => void,
   userRole: UserRole,
   clearNotification: (id: string, type: 'comments' | 'major') => void,
   onCreateVault: (id: string) => void,
+  onDeleteVault: (vaultId: string) => void,
+  onRequestMoreProof: (vaultId: string) => void,
   setActiveTab: (tab: string) => void,
-  setListTab: (tab: 'upcoming' | 'active' | 'closed') => void
+  setListTab: (tab: 'upcoming' | 'active' | 'closed') => void,
+  onSelectCase: (id: string) => void,
+  addToRoute: (id: string) => void,
+  removeFromRoute: (id: string) => void,
+  isInRoute: boolean
 }) {
   const [modalType, setModalType] = useState<'Agent' | 'Lawyer' | null>(null);
   const [isDoneModalOpen, setIsDoneModalOpen] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [activeDetailTab, setActiveDetailTab] = useState<string>('evidence-0');
   const [activeVaultIndex, setActiveVaultIndex] = useState(0);
+  const isEvidenceLocked = ['Ready For Legal', 'Recovery In Progress', 'Closed'].includes(caseData.stage);
 
   const handleTabChange = (tab: string) => {
     setActiveDetailTab(tab);
@@ -1088,15 +1202,15 @@ function CaseDetailView({
 
   const handleConfirm = (notes: string, selectedVaultIds?: string[]) => {
     if (modalType === 'Agent') {
-      onUpdateStage(caseData.id, 'Agent Assignment', notes, 'Agent');
+      onUpdateStage(caseData.id, 'Agent Assignment', notes, 'Agent', undefined, undefined, selectedVaultIds);
     } else if (modalType === 'Lawyer') {
       onUpdateStage(caseData.id, 'Ready For Legal', notes, 'Lawyer', undefined, undefined, selectedVaultIds);
     }
     setModalType(null);
   };
 
-  const handleDoneConfirm = (notes: string) => {
-    onUpdateStage(caseData.id, caseData.stage, notes); // Just add to audit trail
+  const handleDoneConfirm = (action: string, notes: string) => {
+    onUpdateStage(caseData.id, caseData.stage, notes, undefined, notes, caseData.assignedTo, undefined, action); // Just add to audit trail + action
     setIsDoneModalOpen(false);
   };
 
@@ -1203,6 +1317,27 @@ function CaseDetailView({
                  <span className="text-[10px] font-black text-text-tertiary uppercase tracking-widest">Forensic PDF</span>
               </button>
 
+              {userRole === 'Agent' && (
+                <button 
+                  onClick={() => isInRoute ? removeFromRoute(caseData.id) : addToRoute(caseData.id)}
+                  className={cn(
+                    "rounded-2xl px-6 py-4 flex items-center justify-center gap-3 transition-all shadow-sm group whitespace-nowrap border",
+                    isInRoute 
+                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20" 
+                      : "bg-brand-indigo text-white border-brand-indigo/50 hover:bg-brand-indigo/90 shadow-lg shadow-brand-indigo/20"
+                  )}
+                >
+                   {isInRoute ? (
+                     <CheckCircle2 className="w-4 h-4" />
+                   ) : (
+                     <Navigation className="w-4 h-4 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                   )}
+                   <span className="text-[10px] font-black uppercase tracking-widest">
+                     {isInRoute ? "In Route" : "Add to Route"}
+                   </span>
+                </button>
+              )}
+
               {userRole === 'Admin' && caseData.stage === 'New' && (
                 <button 
                   onClick={() => {
@@ -1219,6 +1354,51 @@ function CaseDetailView({
             </div>
           </div>
         </div>
+
+        {/* Agent Resolution Highlight (For Admin) */}
+        {userRole === 'Admin' && caseData.agentActionTaken && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="mb-12 p-10 bg-emerald-500/5 border-2 border-emerald-500/30 rounded-[40px] relative overflow-hidden group shadow-2xl"
+          >
+            <div className="absolute -top-10 -right-10 opacity-[0.03] group-hover:scale-110 transition-transform duration-700">
+               <CheckCircle2 className="w-64 h-64 text-emerald-500" />
+            </div>
+            <div className="relative z-10">
+               <div className="flex items-center gap-3 mb-8">
+                 <div className="w-10 h-10 rounded-2xl bg-emerald-500 shadow-lg shadow-emerald-500/20 flex items-center justify-center">
+                    <CheckCircle2 className="w-6 h-6 text-white" />
+                 </div>
+                 <div>
+                    <span className="text-[10px] font-black text-emerald-400 uppercase tracking-[0.2em] block mb-0.5">Field Verification Complete</span>
+                    <h3 className="text-xl font-black text-white tracking-tight">Agent Resolution Declared</h3>
+                 </div>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-12 pt-8 border-t border-emerald-500/10">
+                  <div className="space-y-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                       <Smartphone className="w-3 h-3" /> Action Taken
+                    </p>
+                    <p className="text-2xl font-black text-white leading-tight">
+                      {caseData.agentActionTaken.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                    </p>
+                  </div>
+                  <div className="space-y-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                       <FileText className="w-3 h-3" /> Field Agent's Narrative
+                    </p>
+                    <div className="p-5 bg-white/[0.03] border border-white/5 rounded-2xl">
+                      <p className="text-[14px] text-slate-300 font-medium italic leading-relaxed">
+                        "{caseData.agentResolutionNote || 'No specific details provided by the agent.'}"
+                      </p>
+                    </div>
+                  </div>
+               </div>
+            </div>
+          </motion.div>
+        )}
 
         {/* Song Details Section */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -1266,17 +1446,30 @@ function CaseDetailView({
         {/* Detail Tabs */}
         <div className="flex border-b border-slate-800 gap-8 items-center">
           {caseData.evidenceVaults.map((vault, idx) => (
-            <button 
-              key={vault.id}
-              onClick={() => handleTabChange(`evidence-${idx}`)}
-              className={cn(
-                "pb-4 text-[11px] font-black uppercase tracking-widest transition-all relative",
-                activeDetailTab === `evidence-${idx}` ? "text-blue-400" : "text-slate-500 hover:text-slate-300"
+            <div key={vault.id} className="relative flex items-center group">
+              <button 
+                onClick={() => handleTabChange(`evidence-${idx}`)}
+                className={cn(
+                  "pb-4 text-[11px] font-black uppercase tracking-widest transition-all relative pr-6",
+                  activeDetailTab === `evidence-${idx}` ? "text-blue-400" : "text-slate-500 hover:text-slate-300"
+                )}
+              >
+                {vault.name}
+                {activeDetailTab === `evidence-${idx}` && <motion.div layoutId="detailTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500" />}
+              </button>
+              {userRole === 'Admin' && (
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteVault(vault.id);
+                  }}
+                  className="absolute right-0 top-0 p-1 text-slate-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  title="Delete vault"
+                >
+                  <Plus className="w-3 h-3 rotate-45" />
+                </button>
               )}
-            >
-              {vault.name}
-              {activeDetailTab === `evidence-${idx}` && <motion.div layoutId="detailTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500" />}
-            </button>
+            </div>
           ))}
           
           {userRole === 'Agent' && (
@@ -1366,16 +1559,42 @@ function CaseDetailView({
                       />
                     </div>
                     
-                    <div className="bg-slate-900 rounded-3xl p-8 border border-slate-800 shadow-sm">
-                      <div className="flex items-center gap-3 mb-6">
-                        <div className="w-9 h-9 rounded-xl bg-blue-900/20 flex items-center justify-center border border-blue-900/30">
-                          <FileText className="w-4 h-4 text-blue-400" />
+                    <div className="bg-slate-900 rounded-3xl p-8 border border-slate-800 shadow-sm flex flex-col justify-between h-full">
+                      <div className="space-y-6">
+                        <div className="flex items-center justify-between mb-6">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-blue-900/20 flex items-center justify-center border border-blue-900/30">
+                              <FileText className="w-4 h-4 text-blue-400" />
+                            </div>
+                            <h3 className="font-black text-white uppercase tracking-widest text-[11px]">Vault Notes</h3>
+                          </div>
+                          {userRole === 'Admin' && (
+                            <button
+                              disabled={caseData.evidenceVaults[activeVaultIndex]?.moreProofRequested || !!caseData.evidenceVaults.find((v, idx) => {
+                                return idx < activeVaultIndex && !v.moreProofRequested;
+                              })}
+                              onClick={() => onRequestMoreProof(caseData.evidenceVaults[activeVaultIndex].id)}
+                              className={cn(
+                                "px-3 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all",
+                                caseData.evidenceVaults[activeVaultIndex]?.moreProofRequested 
+                                  ? "bg-amber-500/10 text-amber-500 border border-amber-500/20" 
+                                  : "bg-white/5 border border-border-standard text-text-tertiary hover:text-blue-400 hover:border-blue-500/30 active:scale-95"
+                              )}
+                            >
+                              {caseData.evidenceVaults[activeVaultIndex]?.moreProofRequested ? "Proof Requested" : "Request More Proof"}
+                            </button>
+                          )}
                         </div>
-                        <h3 className="font-black text-white uppercase tracking-widest text-[11px]">Vault Notes</h3>
+                        <p className="text-slate-300 text-sm leading-relaxed font-medium italic">
+                          "{caseData.evidenceVaults[activeVaultIndex]?.notes || "No additional notes provided for this vault."}"
+                        </p>
                       </div>
-                      <p className="text-slate-300 text-sm leading-relaxed font-medium">
-                        {caseData.evidenceVaults[activeVaultIndex]?.notes || "No additional notes provided for this vault."}
-                      </p>
+                      {caseData.evidenceVaults[activeVaultIndex]?.moreProofRequested && (
+                        <div className="mt-6 pt-6 border-t border-white/5 flex items-center gap-3">
+                           <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                           <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Pending Agent Re-Verification</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1609,16 +1828,14 @@ function CaseDetailView({
           </div>
           
           <div className="flex gap-4 w-full md:w-auto">
-            {userRole === 'Agent' && (
+            {userRole === 'Agent' && !isEvidenceLocked && (
               <>
                 <button 
-                  onClick={() => {
-                    handleTabChange('evidence');
-                    // Scroll to evidence section if needed, or just switch tab
-                  }}
-                  className="flex-1 md:flex-none px-8 py-4 bg-slate-800 hover:bg-slate-700 text-white text-xs font-black uppercase tracking-widest rounded-xl transition-all border border-slate-700 shadow-sm active:scale-95"
+                  onClick={() => onCreateVault(caseData.id)}
+                  className="flex-1 md:flex-none px-8 py-4 bg-slate-800 hover:bg-slate-700 text-white text-xs font-black uppercase tracking-widest rounded-xl transition-all border border-slate-700 shadow-sm active:scale-95 flex items-center gap-2"
                 >
-                  Edit Evidence
+                  <Plus className="w-4 h-4" />
+                  Add New Evidence Vault
                 </button>
                 <button 
                   onClick={() => setIsDoneModalOpen(true)}
@@ -1628,15 +1845,21 @@ function CaseDetailView({
                 </button>
               </>
             )}
+            {userRole === 'Agent' && isEvidenceLocked && (
+               <div className="flex items-center gap-2 px-4 py-2 border border-border-standard bg-white/5 rounded-lg opacity-60">
+                 <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                 <span className="text-[10px] font-black text-text-tertiary uppercase tracking-widest">Case Forensically Locked</span>
+               </div>
+            )}
             {userRole === 'Admin' && caseData.stage === 'New' && (
               <div />
             )}
-            {userRole === 'Admin' && caseData.stage !== 'New' && (
+            {userRole === 'Admin' && caseData.stage !== 'New' && !isEvidenceLocked && (
               <button 
                 onClick={() => setModalType('Agent')}
                 className="flex-1 md:flex-none px-8 py-4 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-black uppercase tracking-widest rounded-xl transition-all border border-border-standard shadow-sm hover:shadow-md active:scale-95"
               >
-                Request More Proof
+                {caseData.hasBeenSentToAgent ? "Send Back to Agent" : "Request More Proof"}
               </button>
             )}
             {userRole !== 'Agent' && (
@@ -1690,11 +1913,20 @@ function DoneModal({
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onConfirm: (notes: string) => void 
+  onConfirm: (action: string, notes: string) => void 
 }) {
   const [notes, setNotes] = useState('');
+  const [action, setAction] = useState('none');
 
   if (!isOpen) return null;
+
+  const actionOptions = [
+    { value: 'none', label: 'None' },
+    { value: 'venue_visited_no_action', label: 'Venue visited, no action' },
+    { value: 'venue_visited_vault_added', label: 'Venue visited, evidence vault added' },
+    { value: 'venue_not_visited_issue', label: 'Venue not visited, issue encountered' },
+    { value: 'venue_not_visited_no_issue', label: 'Venue not visited, no issue' },
+  ];
 
   return (
     <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
@@ -1712,24 +1944,40 @@ function DoneModal({
         className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden"
       >
         <div className="p-8 border-b border-slate-800">
-          <h3 className="text-xl font-black text-white tracking-tight">Agent Task Completion</h3>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">What was changed?</p>
+          <h3 className="text-xl font-black text-white tracking-tight">Agent Field Report</h3>
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Finalize your site visit findings</p>
         </div>
-        <div className="p-8">
-          <textarea 
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Describe your changes..."
-            className="w-full h-32 bg-slate-950 border border-slate-800 rounded-2xl p-4 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all resize-none"
-          />
+        <div className="p-8 space-y-6">
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Action Taken</label>
+            <select 
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
+            >
+              {actionOptions.map(opt => (
+                <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Further Details</label>
+            <textarea 
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Describe your findings or issues encountered..."
+              className="w-full h-32 bg-slate-950 border border-slate-800 rounded-2xl p-4 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all resize-none"
+            />
+          </div>
         </div>
         <div className="p-8 bg-slate-950/50 border-t border-slate-800 flex gap-4">
           <button onClick={onClose} className="flex-1 py-4 bg-slate-900 text-slate-400 text-[10px] font-black uppercase tracking-widest rounded-xl">Cancel</button>
           <button 
-            onClick={() => { onConfirm(notes); setNotes(''); }}
+            onClick={() => { onConfirm(action, notes); setNotes(''); setAction('none'); }}
             className="flex-1 py-4 bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-lg shadow-emerald-600/20"
           >
-            Done
+            Mark as Done
           </button>
         </div>
       </motion.div>
@@ -2120,6 +2368,14 @@ function KanbanCard({ caseData, onSelectCase, isInvalid }: KanbanCardProps) {
         <ArrowRight className="w-3 h-3 text-slate-700 group-hover:text-blue-400 transition-colors" />
       </div>
       <h4 className="text-sm font-black text-white mb-2 tracking-tight line-clamp-1">{caseData.location.name}</h4>
+      
+      {caseData.agentActionTaken && (
+        <div className="mb-3 flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg self-start">
+          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
+          <span className="text-[8px] font-black text-emerald-400 uppercase tracking-widest">Marked as Done</span>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 text-[10px] text-slate-500 font-bold mb-4">
         <MapPin className="w-3 h-3" />
         {caseData.location.city}
@@ -2135,13 +2391,30 @@ function KanbanCard({ caseData, onSelectCase, isInvalid }: KanbanCardProps) {
   );
 }
 
-function AgentDashboard({ cases, onSelectCase, onUpdateStage, setActiveTab, addComment, onCreateVault }: { cases: Case[], onSelectCase: (id: string) => void, onUpdateStage: (id: string, stage: CaseStage, notes?: string, type?: 'Agent' | 'Lawyer', resNote?: string, resAgentName?: string, selectedVaultIds?: string[]) => void, setActiveTab: (tab: string) => void, addComment: (id: string, text: string) => void, onCreateVault: (id: string) => void }) {
+function AgentDashboard({ 
+  cases, 
+  onSelectCase, 
+  onUpdateStage, 
+  setActiveTab, 
+  addComment, 
+  onCreateVault, 
+  routeCaseIds, 
+  setRouteCaseIds,
+  removeFromRoute
+}: { 
+  cases: Case[], 
+  onSelectCase: (id: string) => void, 
+  onUpdateStage: (id: string, stage: CaseStage, notes?: string, type?: 'Agent' | 'Lawyer', resNote?: string, resAgentName?: string, selectedVaultIds?: string[], agentActionTaken?: string) => void, 
+  setActiveTab: (tab: string) => void, 
+  addComment: (id: string, text: string) => void, 
+  onCreateVault: (id: string) => void,
+  routeCaseIds: string[],
+  setRouteCaseIds: (ids: string[]) => void,
+  removeFromRoute: (id: string) => void
+}) {
   const [resolvingCase, setResolvingCase] = useState<Case | null>(null);
   const [selectedAgentCaseId, setSelectedAgentCaseId] = useState<string | null>(cases.length > 0 ? cases[0].id : null);
-  const [commentText, setCommentText] = useState('');
-  const [rightTab, setRightTab] = useState<'threads' | 'vaults'>('threads');
-  const [agentViewMode, setAgentViewMode] = useState<'timeline' | 'pathing'>('timeline');
-  const [routeCaseIds, setRouteCaseIds] = useState<string[]>([]);
+  const [showPath, setShowPath] = useState(false);
 
   const selectedCase = cases.find(c => c.id === selectedAgentCaseId) || cases[0];
   const routeCases = cases.filter(c => routeCaseIds.includes(c.id));
@@ -2186,30 +2459,6 @@ function AgentDashboard({ cases, onSelectCase, onUpdateStage, setActiveTab, addC
               </div>
             </div>
           </div>
-
-          <div className="flex gap-8">
-            <button 
-              onClick={() => setAgentViewMode('timeline')}
-              className={cn(
-                "pb-2 text-[10px] font-black uppercase tracking-widest transition-all relative",
-                agentViewMode === 'timeline' ? "text-brand-indigo" : "text-text-quaternary hover:text-text-secondary"
-              )}
-            >
-              Timeline
-              {agentViewMode === 'timeline' && <motion.div layoutId="agent-mode-tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-indigo" />}
-            </button>
-            <button 
-              onClick={() => setAgentViewMode('pathing')}
-              className={cn(
-                "pb-2 text-[10px] font-black uppercase tracking-widest transition-all relative flex items-center gap-2",
-                agentViewMode === 'pathing' ? "text-brand-indigo" : "text-text-quaternary hover:text-text-secondary"
-              )}
-            >
-              Pathing
-              {routeCaseIds.length > 0 && <span className="w-4 h-4 rounded-full bg-brand-indigo text-white text-[8px] flex items-center justify-center">{routeCaseIds.length}</span>}
-              {agentViewMode === 'pathing' && <motion.div layoutId="agent-mode-tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-indigo" />}
-            </button>
-          </div>
         </div>
         
         <div className="flex items-center gap-4">
@@ -2232,7 +2481,8 @@ function AgentDashboard({ cases, onSelectCase, onUpdateStage, setActiveTab, addC
                 key={c.id}
                 onClick={() => {
                   setSelectedAgentCaseId(c.id);
-                  setAgentViewMode('timeline');
+                  onSelectCase(c.id);
+                  setActiveTab('cases');
                 }}
                 className={cn(
                   "w-full p-6 border-b border-border-subtle text-left transition-all relative group",
@@ -2255,398 +2505,81 @@ function AgentDashboard({ cases, onSelectCase, onUpdateStage, setActiveTab, addC
           </div>
         </div>
 
-        {agentViewMode === 'timeline' ? (
-          <div className="flex-1 flex overflow-hidden">
-            {/* Left Side: Timeline */}
-            <div className="flex-1 overflow-y-auto p-10 border-r border-border-subtle">
-          {selectedCase && (
-            <div className="relative">
-              {/* Case Header Milestone */}
-              <div className="flex items-start gap-10 mb-12">
-                <div className="relative z-10">
-                  <div className="w-16 h-16 rounded-[24px] bg-brand-indigo flex items-center justify-center shadow-xl shadow-brand-indigo/20 border border-white/10">
-                    <FileText className="w-8 h-8 text-white" />
-                  </div>
-                </div>
-                <div className="flex-1 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] font-black text-text-quaternary uppercase tracking-widest mb-1 block">{selectedCase.id}</span>
-                      <h3 className="text-2xl font-black text-text-primary tracking-tight">{selectedCase.location.name}</h3>
-                    </div>
-                    <div className="flex gap-3">
-                      <button 
-                        onClick={() => {
-                          onSelectCase(selectedCase.id);
-                          setActiveTab('cases');
-                        }}
-                        className="px-6 py-2.5 bg-white/[0.02] border border-border-standard rounded-xl text-[10px] font-black uppercase tracking-widest text-text-secondary hover:bg-white/[0.04] transition-all"
-                      >
-                        Open Case File
-                      </button>
-                      <div className="flex gap-3">
-                        <button 
-                          onClick={() => {
-                            if (!routeCaseIds.includes(selectedCase.id)) {
-                              setRouteCaseIds([...routeCaseIds, selectedCase.id]);
-                            }
-                            setAgentViewMode('pathing');
-                          }}
-                          className="px-6 py-2.5 bg-brand-indigo text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand-indigo/20 hover:bg-brand-indigo/90 transition-all flex items-center gap-2"
-                        >
-                          <Navigation className="w-3 h-3" />
-                          Add to Route
-                        </button>
-                        <button 
-                          onClick={() => setResolvingCase(selectedCase)}
-                          className="px-6 py-2.5 bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600/30 transition-all"
-                        >
-                          Mark as Done
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-6">
-                    <div className="flex items-center gap-2 text-text-tertiary">
-                      <MapPin className="w-4 h-4" />
-                      <span className="text-xs font-bold">{selectedCase.location.city}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-text-tertiary">
-                      <Clock className="w-4 h-4" />
-                      <span className="text-xs font-bold">{format(selectedCase.timestamp, 'MMM d, HH:mm')}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Timeline Flow */}
-              <div className="ml-8 pl-12 space-y-12 border-l-2 border-dashed border-border-standard/50 pb-20">
-                {/* Initial Evidence Milestone */}
-                <div className="relative">
-                  <div className="absolute -left-[57px] top-0 w-4 h-4 rounded-full bg-bg-panel border-4 border-brand-indigo shadow-[0_0_10px_rgba(99,102,241,0.5)]" />
-                  <div className="space-y-4">
-                    <p className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Initial Forensic Capture</p>
-                    <div className="flex gap-4">
-                      <div className="w-48 aspect-video bg-black rounded-2xl overflow-hidden border border-border-standard shadow-lg relative group">
-                        <video src={selectedCase.videoProofUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" muted loop autoPlay />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-4">
-                          <span className="text-[8px] font-black text-white uppercase tracking-widest">Master Stream</span>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        {selectedCase.absoluteProof.venueImages.slice(0, 2).map((img, i) => (
-                          <div key={i} className="w-24 h-24 rounded-2xl overflow-hidden border border-border-standard shadow-md relative group">
-                            <img src={img} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Audit Trail Milestones */}
-                {selectedCase.auditTrail.map((entry) => {
-                  const isSubtle = !entry.details || entry.details === "No additional notes provided." || entry.action === "Case Created";
-                  const isMajor = entry.action === "Evidence Vault Created";
-                  
-                  return (
-                    <div key={entry.id} className="relative">
-                      <div className={cn(
-                        "absolute -left-[55px] top-1 w-3 h-3 rounded-full",
-                        isMajor ? "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : isSubtle ? "bg-border-standard/30" : "bg-border-standard"
-                      )} />
-                      
-                      {isMajor ? (
-                        <div className="p-8 bg-brand-indigo/5 border border-brand-indigo/20 rounded-[32px] max-w-2xl relative overflow-hidden group">
-                          <div className="absolute top-0 right-0 w-32 h-32 bg-brand-indigo/10 blur-3xl -mr-16 -mt-16 group-hover:bg-brand-indigo/20 transition-all" />
-                          <div className="flex items-center gap-4 mb-4 relative z-10">
-                            <div className="w-10 h-10 rounded-xl bg-brand-indigo flex items-center justify-center shadow-lg shadow-brand-indigo/20">
-                              <Shield className="w-5 h-5 text-white" />
-                            </div>
-                            <div>
-                              <h4 className="text-lg font-black text-text-primary tracking-tight">{entry.action}</h4>
-                            </div>
-                          </div>
-                          
-                          {/* Forensic Capture for Evidence Vault Created */}
-                          {entry.action === "Evidence Vault Created" && (
-                            <div className="mb-6 space-y-3 relative z-10">
-                              <p className="text-[10px] font-black text-brand-indigo uppercase tracking-widest">Forensic Capture Display</p>
-                              <div className="w-full aspect-video bg-black rounded-2xl overflow-hidden border border-brand-indigo/20 shadow-lg relative group">
-                                <video src={selectedCase.videoProofUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" muted loop autoPlay />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-4">
-                                  <span className="text-[8px] font-black text-white uppercase tracking-widest">Master Stream</span>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          <p className="text-sm text-text-secondary leading-relaxed font-medium mb-4 relative z-10">{entry.details}</p>
-                          <div className="flex items-center gap-3 relative z-10">
-                            <span className="text-[9px] text-text-quaternary font-bold uppercase tracking-widest">Logged by {entry.actor}</span>
-                            <span className="text-[9px] text-text-quaternary/30 font-bold">•</span>
-                            <span className="text-[9px] text-text-quaternary font-bold">{format(new Date(entry.timestamp), 'HH:mm:ss')}</span>
-                          </div>
-                        </div>
-                      ) : isSubtle ? (
-                        <div className="flex items-center gap-3 py-1">
-                          <span className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">{entry.action}</span>
-                          <span className="text-[10px] text-text-quaternary/50 font-bold">•</span>
-                          <span className="text-[10px] text-text-quaternary/50 font-bold uppercase tracking-widest">{entry.actor}</span>
-                          <span className="text-[9px] text-text-quaternary/30 font-bold ml-auto">{format(new Date(entry.timestamp), 'HH:mm:ss')}</span>
-                        </div>
-                      ) : (
-                        <div className="p-6 bg-white/[0.01] border border-border-standard rounded-[24px] max-w-2xl">
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-black text-brand-indigo uppercase tracking-widest">{entry.action}</span>
-                              <span className="text-[10px] text-text-quaternary font-bold">•</span>
-                              <span className="text-[10px] text-text-quaternary font-bold uppercase tracking-widest">{entry.actor}</span>
-                            </div>
-                            <span className="text-[9px] text-text-quaternary font-bold">{format(new Date(entry.timestamp), 'HH:mm:ss')}</span>
-                          </div>
-                          <p className="text-sm text-text-secondary leading-relaxed italic">"{entry.details}"</p>
-                          {entry.newStage && entry.newStage !== entry.previousStage && (
-                            <div className="mt-4 flex items-center gap-2">
-                              <span className="text-[8px] font-black text-text-quaternary uppercase tracking-widest">Stage Transition:</span>
-                              <span className="px-2 py-0.5 bg-white/5 border border-border-standard rounded text-[8px] font-black text-emerald-400 uppercase tracking-widest">{entry.newStage}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {/* Current Status Milestone */}
-                <div className="relative">
-                  <div className="absolute -left-[57px] top-0 w-4 h-4 rounded-full bg-border-standard shadow-sm" />
-                  <div className="pl-2">
-                    <div className="flex items-center gap-3 mb-1">
-                      <span className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Current Status: {selectedCase.stage}</span>
-                    </div>
-                    {selectedCase.auditTrail.length > 0 && (
-                      <p className="text-xs text-text-tertiary font-medium">{selectedCase.auditTrail[selectedCase.auditTrail.length - 1].details}</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right Side: Internal Threads & Vaults */}
-        <div className="w-96 flex flex-col bg-bg-panel border-l border-border-subtle">
-          {/* Latest Status Audit Insight - Minimal Version */}
-          {selectedCase.auditTrail.length > 0 && (
-            <div className="p-6 border-b border-border-subtle bg-white/[0.01]">
-              <div className="p-5 border border-border-standard bg-white/[0.01] rounded-[24px] relative overflow-hidden shadow-sm">
-                <div className="space-y-4 relative z-10">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-[8px] font-black text-text-quaternary uppercase tracking-widest mb-0.5 block opacity-40">Latest Assigned Task</span>
-                      <h4 className="text-xs font-black text-text-primary tracking-tight">{selectedCase.auditTrail[selectedCase.auditTrail.length - 1].action}</h4>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[8px] font-black text-brand-indigo uppercase tracking-widest opacity-60">Status Active</p>
-                      <p className="text-[9px] text-text-quaternary font-bold">{format(new Date(selectedCase.auditTrail[selectedCase.auditTrail.length - 1].timestamp), 'HH:mm:ss')}</p>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-text-secondary leading-relaxed font-medium">
-                    {selectedCase.auditTrail[selectedCase.auditTrail.length - 1].details}
-                  </p>
-
-                  <div className="flex items-center justify-between pt-3 border-t border-white/5">
-                    <div className="flex items-center gap-2">
-                       <span className="text-[8px] font-black text-text-quaternary uppercase tracking-widest opacity-30">Authorized By</span>
-                       <span className="text-[9px] font-black text-text-quaternary uppercase tracking-widest">{selectedCase.auditTrail[selectedCase.auditTrail.length - 1].actor}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="p-6 border-b border-border-subtle flex items-center justify-between bg-white/[0.01]">
-            <div className="p-1 bg-white/[0.03] border border-border-standard rounded-2xl flex gap-1 flex-1">
-                <button 
-                  onClick={() => setRightTab('threads')}
-                  className={cn(
-                    "flex-1 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all rounded-xl",
-                    rightTab === 'threads' ? "bg-white/[0.08] text-text-primary shadow-sm" : "text-text-quaternary hover:text-text-secondary"
-                  )}
-                >
-                  Threads
-                </button>
-                <button 
-                  onClick={() => setRightTab('vaults')}
-                  className={cn(
-                    "flex-1 py-1.5 text-[9px] font-black uppercase tracking-widest transition-all rounded-xl",
-                    rightTab === 'vaults' ? "bg-white/[0.08] text-text-primary shadow-sm" : "text-text-quaternary hover:text-text-secondary"
-                  )}
-                >
-                  Vaults
-                </button>
-            </div>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-0 h-full flex flex-col">
-            <div className="px-6 pb-6 space-y-8 flex-1 flex flex-col min-h-0 pt-6">
-              <div className="flex-1 overflow-y-auto min-h-0 pr-2 -mr-2 custom-scrollbar">
-                {rightTab === 'threads' ? (
-                  <div className="space-y-6">
-                    <div className="flex items-center gap-2 mb-2">
-                      <MessageSquare className="w-3 h-3 text-text-quaternary" />
-                      <h4 className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">Internal Threads</h4>
-                    </div>
-                  {selectedCase?.comments.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-text-quaternary opacity-50 py-20">
-                      <MessageSquare className="w-12 h-12 mb-4" />
-                      <p className="text-xs font-bold uppercase tracking-widest">No internal messages</p>
-                    </div>
-                  ) : (
-                    selectedCase?.comments.map(comment => (
-                      <div key={comment.id} className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className={cn(
-                            "text-[10px] font-black uppercase tracking-widest",
-                            comment.role === 'Admin' ? "text-blue-400" : comment.role === 'Lawyer' ? "text-purple-400" : "text-emerald-400"
-                          )}>
-                            {comment.author}
-                          </span>
-                          <span className="text-[9px] text-text-quaternary font-bold">{format(comment.timestamp, 'HH:mm')}</span>
-                        </div>
-                        <div className="p-4 bg-white/[0.02] border border-border-standard rounded-2xl">
-                          <p className="text-xs text-text-secondary leading-relaxed">{comment.text}</p>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-            ) : (
-              <div className="space-y-6">
-                {selectedCase?.evidenceVaults?.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-text-quaternary opacity-50 py-20">
-                    <Shield className="w-12 h-12 mb-4" />
-                    <p className="text-xs font-bold uppercase tracking-widest">No evidence vaults</p>
-                  </div>
-                ) : (
-                  selectedCase?.evidenceVaults?.map(vault => (
-                    <div key={vault.id} className="p-6 bg-white/[0.02] border border-border-standard rounded-[32px] space-y-6 group hover:border-brand-indigo/30 transition-all">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-                            <Shield className="w-4 h-4 text-emerald-500" />
-                          </div>
-                          <div>
-                            <h4 className="text-[11px] font-black text-text-primary uppercase tracking-widest">{vault.name}</h4>
-                            <span className="text-[8px] font-bold text-text-quaternary uppercase tracking-widest">Secure Ledger Point</span>
-                          </div>
-                        </div>
-                        <span className="text-[9px] text-text-quaternary font-bold">{format(vault.timestamp, 'MMM d, HH:mm')}</span>
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                        {vault.images.slice(0, 4).map((img, i) => (
-                          <div key={i} className="aspect-[4/3] rounded-2xl bg-white/5 border border-white/5 overflow-hidden relative group/img">
-                            <img src={img} className="w-full h-full object-cover grayscale opacity-50 group-hover/img:grayscale-0 group-hover/img:opacity-100 transition-all duration-500" referrerPolicy="no-referrer" />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity" />
-                          </div>
-                        ))}
-                        {vault.images.length === 0 && (
-                          <div className="col-span-2 py-10 flex flex-col items-center justify-center bg-white/[0.01] border border-dashed border-border-standard rounded-[24px]">
-                            <Video className="w-8 h-8 text-text-quaternary mb-3 opacity-20" />
-                            <p className="text-[9px] font-black text-text-quaternary uppercase tracking-widest">Awaiting Forensic Stream</p>
-                          </div>
-                        )}
-                      </div>
-                      
-                      <div className="p-4 bg-white/[0.02] border border-border-standard rounded-2xl relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/30" />
-                        <p className="text-[11px] text-text-secondary leading-relaxed font-medium italic">"{vault.notes}"</p>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2">
-                         <div className="flex gap-1">
-                            {[1,2,3,4].map(i => <div key={i} className="w-1 h-1 rounded-full bg-white/10" />)}
-                         </div>
-                         <button className="text-[8px] font-black text-emerald-500 uppercase tracking-widest hover:underline">Link Forensic ID</button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-            </div>
-          </div>
-        </div>
-
-          {rightTab === 'threads' && (
-            <div className="p-6 border-t border-border-subtle bg-white/[0.01]">
-              <div className="relative">
-                <textarea
-                  value={commentText}
-                  onChange={(e) => setCommentText(e.target.value)}
-                  placeholder="Add internal note..."
-                  className="w-full bg-transparent border border-border-standard rounded-2xl p-4 pr-12 text-xs text-text-primary placeholder:text-text-quaternary focus:border-brand-indigo outline-none transition-all resize-none h-24"
-                />
-                <button 
-                  onClick={() => {
-                    if (commentText.trim() && selectedCase) {
-                      addComment(selectedCase.id, commentText);
-                      setCommentText('');
-                    }
-                  }}
-                  className="absolute bottom-4 right-4 p-2 bg-brand-indigo text-white rounded-xl shadow-lg shadow-brand-indigo/20 hover:bg-brand-indigo/90 transition-all"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      ) : (
-        <div className="flex-1 flex flex-col bg-slate-950 overflow-hidden">
-           <div className="p-8 border-b border-white/5 flex items-center justify-between bg-slate-900/50">
+        <div className="flex-1 flex flex-col bg-slate-950 overflow-hidden relative">
+           <div className="p-8 border-b border-white/5 flex items-center justify-between bg-slate-900/50 z-10 relative">
               <div>
                  <h3 className="text-xl font-black text-white tracking-tight mb-1">Route Pathing</h3>
                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">{routeCaseIds.length} Locations in Sequence</p>
               </div>
-              <button 
-                onClick={() => setRouteCaseIds([])}
-                className="px-4 py-2 text-[10px] font-black text-red-400 uppercase tracking-widest hover:bg-red-400/10 rounded-lg transition-all"
-              >
-                Clear Route
-              </button>
+              <div className="flex gap-4">
+                {routeCaseIds.length > 1 && (
+                  <button 
+                    onClick={() => setShowPath(!showPath)}
+                    className={cn(
+                      "px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2",
+                      showPath 
+                        ? "bg-brand-indigo text-white shadow-lg shadow-brand-indigo/20" 
+                        : "bg-white/5 text-text-secondary border border-white/10 hover:bg-white/10"
+                    )}
+                  >
+                    <Navigation className="w-3 h-3" />
+                    {showPath ? "Hide Path" : "Create Route"}
+                  </button>
+                )}
+                <button 
+                  onClick={() => {
+                    setRouteCaseIds([]);
+                    setShowPath(false);
+                  }}
+                  className="px-6 py-2.5 text-[10px] font-black text-red-400 uppercase tracking-widest hover:bg-red-400/10 border border-red-400/20 rounded-xl transition-all"
+                >
+                  Clear Route
+                </button>
+              </div>
            </div>
            
-           <div className="flex-1 relative">
-              <MapContainer center={[19.0760, 72.8777]} zoom={12} scrollWheelZoom={true} className="h-full w-full z-0">
+           <div className="flex-1 relative z-0">
+              <MapContainer center={[19.0760, 72.8777]} zoom={12} scrollWheelZoom={true} className="h-full w-full">
                 <TileLayer
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                   url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 />
+                {showPath && routeCases.length > 1 && (
+                  <Polyline 
+                    positions={routeCases.map(c => [c.location.lat, c.location.lng] as [number, number])} 
+                    color="#6366f1" 
+                    weight={3}
+                    opacity={0.8}
+                    dashArray="10, 10"
+                  />
+                )}
                 {routeCases.map((c, idx) => (
                   <Marker key={c.id} position={[c.location.lat, c.location.lng]}>
                     <Popup className="custom-popup">
-                      <div className="p-4 min-w-[200px]">
-                        <div className="flex items-center gap-2 mb-2">
-                           <span className="w-5 h-5 rounded-full bg-brand-indigo text-white text-[10px] font-black flex items-center justify-center">{idx + 1}</span>
-                           <span className="text-[10px] font-black text-text-quaternary uppercase tracking-widest">{c.id}</span>
+                      <div className="p-4 min-w-[200px] bg-slate-900 text-white rounded-xl border border-white/10 shadow-2xl">
+                        <div className="flex items-center gap-2 mb-3">
+                           <span className="w-6 h-6 rounded-lg bg-brand-indigo text-white text-[10px] font-black flex items-center justify-center shadow-lg">{idx + 1}</span>
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{c.id}</span>
                         </div>
-                        <h4 className="font-black text-white text-sm mb-1">{c.location.name}</h4>
-                        <p className="text-[10px] text-slate-400 font-bold mb-3">{c.location.address}</p>
-                        <button 
-                          onClick={() => {
-                            setSelectedAgentCaseId(c.id);
-                            setAgentViewMode('timeline');
-                          }}
-                          className="w-full py-2 bg-white/5 hover:bg-white/10 text-[9px] font-black text-white uppercase tracking-widest rounded-lg border border-white/10 transition-all"
-                        >
-                          View Timeline
-                        </button>
+                        <h4 className="font-black text-white text-base mb-1 tracking-tight">{c.location.name}</h4>
+                        <p className="text-[10px] text-slate-400 font-bold mb-4 uppercase tracking-widest">{c.location.address}</p>
+                        <div className="flex flex-col gap-2">
+                          <button 
+                            onClick={() => {
+                              onSelectCase(c.id);
+                              setActiveTab('cases');
+                            }}
+                            className="w-full py-2.5 bg-brand-indigo text-white text-[9px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-brand-indigo/20 hover:bg-brand-indigo/90 transition-all border border-brand-indigo/50 mb-1"
+                          >
+                            Open Case Details
+                          </button>
+                          <button 
+                            onClick={() => removeFromRoute(c.id)}
+                            className="w-full py-2 bg-slate-800 text-slate-400 text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-slate-700 hover:text-white transition-all border border-white/5"
+                          >
+                            Remove Pin
+                          </button>
+                        </div>
                       </div>
                     </Popup>
                   </Marker>
@@ -2654,31 +2587,51 @@ function AgentDashboard({ cases, onSelectCase, onUpdateStage, setActiveTab, addC
               </MapContainer>
 
               {/* Route Overlay List */}
-              <div className="absolute top-6 right-6 z-10 w-64 max-h-[calc(100%-48px)] overflow-y-auto bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl space-y-6">
-                 <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Route Sequence</h4>
-                 <div className="space-y-4">
+              <div className="absolute top-6 right-6 z-10 w-72 max-h-[calc(100%-48px)] overflow-y-auto bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-[32px] p-8 shadow-2xl space-y-8">
+                 <div className="flex items-center justify-between">
+                    <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Route Sequence</h4>
+                    <span className="px-2 py-0.5 bg-brand-indigo/20 text-brand-indigo text-[8px] font-black rounded uppercase tracking-widest">{routeCases.length} Stops</span>
+                 </div>
+                 <div className="space-y-6">
                     {routeCases.map((c, idx) => (
-                      <div key={c.id} className="flex gap-4 group">
-                         <div className="flex flex-col items-center gap-1">
-                            <div className="w-6 h-6 rounded-full bg-brand-indigo text-white text-[10px] font-black flex items-center justify-center shrink-0">
+                      <button 
+                        key={c.id}
+                        onClick={() => onSelectCase(c.id)}
+                        className="flex gap-5 group w-full text-left"
+                      >
+                         <div className="flex flex-col items-center gap-1 shrink-0">
+                            <div className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 text-white text-[10px] font-black flex items-center justify-center transition-all group-hover:border-brand-indigo/50 group-hover:bg-brand-indigo/10">
                                {idx + 1}
                             </div>
-                            {idx < routeCases.length - 1 && <div className="w-0.5 flex-1 bg-brand-indigo/30" />}
+                            {idx < routeCases.length - 1 && <div className="w-0.5 flex-1 bg-white/10" />}
                          </div>
-                         <div className="flex-1 pb-4">
-                            <p className="text-[11px] font-black text-white truncate">{c.location.name}</p>
-                            <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">{c.location.city}</p>
+                         <div className="flex-1 pb-2">
+                            <p className="text-xs font-black text-white group-hover:text-brand-indigo transition-colors mb-1 truncate">{c.location.name}</p>
+                            <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">{c.location.city}</p>
                          </div>
-                      </div>
+                         <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeFromRoute(c.id);
+                            }}
+                            className="p-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-400/10 rounded-lg"
+                         >
+                            <X className="w-3.5 h-3.5" />
+                         </button>
+                      </button>
                     ))}
                     {routeCases.length === 0 && (
-                      <p className="text-[10px] text-slate-500 font-bold italic">No locations added to route yet.</p>
+                      <div className="py-10 text-center space-y-3">
+                        <div className="w-12 h-12 rounded-2xl bg-white/5 border border-dashed border-white/10 flex items-center justify-center mx-auto opacity-50">
+                          <MapPin className="w-6 h-6 text-slate-500" />
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-bold italic uppercase tracking-widest">No locations in route</p>
+                      </div>
                     )}
                  </div>
               </div>
            </div>
         </div>
-      )}
       </div>
 
       <AnimatePresence>
@@ -2752,7 +2705,27 @@ const LEGAL_TEMPLATES = [
   { id: 'settlement', name: 'Settlement Offer' }
 ];
 
-function LitigationDashboard({ allCases, onSelectCase, onUpdateStage, setActiveTab, onAddComment, addNotification }: { allCases: Case[], onSelectCase: (id: string) => void, onUpdateStage: (id: string, stage: CaseStage, notes?: string, type?: 'Agent' | 'Lawyer', resNote?: string, resAgentName?: string, selectedVaultIds?: string[]) => void, setActiveTab: (tab: string) => void, onAddComment: (id: string, text: string) => void, addNotification: (msg: string, type?: 'major' | 'info') => void }) {
+function LitigationDashboard({ 
+  allCases, 
+  onSelectCase, 
+  onUpdateStage, 
+  setActiveTab, 
+  onAddComment, 
+  addNotification, 
+  userRole, 
+  onDeleteVault, 
+  onRequestMoreProof 
+}: { 
+  allCases: Case[], 
+  onSelectCase: (id: string) => void, 
+  onUpdateStage: (id: string, stage: CaseStage, notes?: string, type?: 'Agent' | 'Lawyer', resNote?: string, resAgentName?: string, selectedVaultIds?: string[]) => void, 
+  setActiveTab: (tab: string) => void, 
+  onAddComment: (id: string, text: string) => void, 
+  addNotification: (msg: string, type?: 'major' | 'info') => void,
+  userRole: UserRole,
+  onDeleteVault: (caseId: string, vaultId: string) => void,
+  onRequestMoreProof: (caseId: string, vaultId: string) => void
+}) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedVenueName, setSelectedVenueName] = useState<string | null>(null);
   const [selectedLocalCaseId, setSelectedLocalCaseId] = useState<string | null>(null);
@@ -2810,6 +2783,8 @@ function LitigationDashboard({ allCases, onSelectCase, onUpdateStage, setActiveT
     if (selectedLocalCaseId) return currentDossier.allCases.find(c => c.id === selectedLocalCaseId) || currentDossier.activeCases[0];
     return currentDossier.activeCases[0];
   }, [selectedLocalCaseId, currentDossier]);
+
+  const isEvidenceLocked = currentCase ? ['Ready For Legal', 'Recovery In Progress', 'Closed'].includes(currentCase.stage) : false;
 
   useEffect(() => {
     if (currentDossier && !selectedVenueName) {
@@ -3234,6 +3209,18 @@ function LitigationDashboard({ allCases, onSelectCase, onUpdateStage, setActiveT
                                 {isSelected && (
                                   <span className="px-2 py-0.5 bg-brand-indigo/20 text-brand-indigo text-[8px] font-black uppercase rounded tracking-widest">Included</span>
                                 )}
+                                {userRole === 'Admin' && !isEvidenceLocked && (
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (currentCase) onDeleteVault(currentCase.id, vault.id);
+                                      }}
+                                      className="p-1 hover:bg-red-500/10 rounded transition-all text-text-quaternary hover:text-red-500"
+                                      title="Discard Evidence Vault"
+                                    >
+                                      <Plus className="w-3.5 h-3.5 rotate-45" />
+                                    </button>
+                                )}
                               </div>
                               <span className="text-[10px] font-bold text-text-quaternary uppercase tracking-widest">{format(vault.timestamp, 'MMM d, HH:mm')}</span>
                             </div>
@@ -3249,8 +3236,27 @@ function LitigationDashboard({ allCases, onSelectCase, onUpdateStage, setActiveT
                           {isSelected && (
                             <div className="mt-6 pt-6 border-t border-brand-indigo/10 flex items-center justify-between">
                                <div className="text-[9px] font-black text-brand-indigo uppercase tracking-widest">Legally Verified Package</div>
-                               <div className="flex gap-1">
-                                  {[1,2,3,4,5].map(i => <div key={i} className="w-1 h-1 rounded-full bg-brand-indigo" />)}
+                               <div className="flex items-center gap-4">
+                                  {userRole === 'Admin' && (
+                                    <button
+                                      disabled={vault.moreProofRequested || !!currentCase.evidenceVaults.find((v, idx) => {
+                                        const currentIndex = currentCase.evidenceVaults.indexOf(vault);
+                                        return idx < currentIndex && !v.moreProofRequested;
+                                      })}
+                                      onClick={() => currentCase && onRequestMoreProof(currentCase.id, vault.id)}
+                                      className={cn(
+                                        "px-3 py-1 text-[8px] font-black uppercase tracking-widest rounded transition-all",
+                                        vault.moreProofRequested 
+                                          ? "bg-amber-500/10 text-amber-500 border border-amber-500/20" 
+                                          : "bg-white/5 border border-border-standard text-text-quaternary hover:text-brand-indigo hover:border-brand-indigo/30"
+                                      )}
+                                    >
+                                      {vault.moreProofRequested ? "Proof Requested" : "Request More Proof"}
+                                    </button>
+                                  )}
+                                  <div className="flex gap-1">
+                                    {[1,2,3,4,5].map(i => <div key={i} className="w-1 h-1 rounded-full bg-brand-indigo" />)}
+                                  </div>
                                </div>
                             </div>
                           )}
